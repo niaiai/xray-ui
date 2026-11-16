@@ -4,7 +4,8 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 from uuid import uuid4
 
-RouteMode = Literal["global", "bypass_cn", "bypass_private"]
+RouteMode = Literal["global", "bypass_cn"]
+InboundProtocol = Literal["http", "socks", "mixed"]
 Protocol = Literal["vless", "vmess", "trojan", "shadowsocks", "socks", "http"]
 
 
@@ -60,6 +61,8 @@ class MixedInbound:
     node_id: str
     listen: str = "127.0.0.1"
     route_mode: RouteMode = "global"
+    protocol: InboundProtocol = "mixed"
+    skip_private: bool = True
     custom_domains: list[str] = field(default_factory=list)
     id: str = field(default_factory=new_id)
 
@@ -101,6 +104,9 @@ class AppConfig:
             if item.get("route_mode") == "custom":
                 direct_domains.extend(item.get("custom_domains", []))
                 item["route_mode"] = "global"
+            elif item.get("route_mode") == "bypass_private":
+                item["route_mode"] = "global"
+                item["skip_private"] = True
         return cls(
             schema_version=int(value.get("schema_version", 1)),
             settings=AppSettings.from_dict(value.get("settings", {})),
@@ -137,6 +143,8 @@ class AppConfig:
                 errors.append(f"入站 {inbound.name} 的端口无效")
             if inbound.node_id not in node_ids:
                 errors.append(f"入站 {inbound.name} 未绑定有效节点")
-            if inbound.route_mode not in {"global", "bypass_cn", "bypass_private"}:
+            if inbound.route_mode not in {"global", "bypass_cn"}:
                 errors.append(f"入站 {inbound.name} 的路由模式无效")
+            if inbound.protocol not in {"http", "socks", "mixed"}:
+                errors.append(f"入站 {inbound.name} 的协议无效")
         return errors

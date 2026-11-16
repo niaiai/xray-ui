@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
@@ -84,9 +85,10 @@ class LogBridge(QObject):
 
 
 class NodeDialog(QDialog):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, node: Node | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("新增节点")
+        self.node = node
+        self.setWindowTitle("编辑节点" if node else "新增节点")
         form = QFormLayout(self)
         self.name = QLineEdit()
         self.protocol = QLineEdit("vless")
@@ -113,67 +115,108 @@ class NodeDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+        if node:
+            self.name.setText(node.name)
+            self.protocol.setText(node.protocol)
+            self.address.setText(node.address)
+            self.port.setValue(node.port)
+            self.credential.setText(node.credential)
+            self.security.setText(node.security)
+            self.transport.setText(node.transport)
+            self.server_name.setText(node.server_name)
 
     def value(self) -> Node:
-        return Node(
-            name=self.name.text().strip(),
-            protocol=self.protocol.text().strip().lower(),
-            address=self.address.text().strip(),
-            port=self.port.value(),
-            credential=self.credential.text().strip(),
-            security=self.security.text().strip().lower(),
-            transport=self.transport.text().strip().lower(),
-            server_name=self.server_name.text().strip(),
-        )
+        values = {
+            "name": self.name.text().strip(),
+            "protocol": self.protocol.text().strip().lower(),
+            "address": self.address.text().strip(),
+            "port": self.port.value(),
+            "credential": self.credential.text().strip(),
+            "security": self.security.text().strip().lower(),
+            "transport": self.transport.text().strip().lower(),
+            "server_name": self.server_name.text().strip(),
+        }
+        return replace(self.node, **values) if self.node else Node(**values)
 
 
 class InboundDialog(QDialog):
     MODES: ClassVar = {
         "全局": "global",
         "跳过 CN": "bypass_cn",
-        "跳过私有地址": "bypass_private",
     }
 
-    def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
+    PROTOCOLS: ClassVar = {"Mixed（HTTP + SOCKS5）": "mixed", "HTTP": "http", "SOCKS5": "socks"}
+
+    def __init__(
+        self,
+        config: AppConfig,
+        parent: QWidget | None = None,
+        inbound: MixedInbound | None = None,
+    ) -> None:
         super().__init__(parent)
         self.config = config
-        self.setWindowTitle("新增 Mixed 入站")
+        self.inbound = inbound
+        self.setWindowTitle("编辑入站" if inbound else "新增入站")
         form = QFormLayout(self)
         self.name = QLineEdit()
         self.listen = QLineEdit("127.0.0.1")
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
         self.port.setValue(10808)
+        self.protocol = QComboBox()
+        for label, value in self.PROTOCOLS.items():
+            self.protocol.addItem(label, value)
         self.node = QComboBox()
         for node in config.nodes:
             self.node.addItem(node.name, node.id)
         self.mode = QComboBox()
         for label, value in self.MODES.items():
             self.mode.addItem(label, value)
+        self.skip_private = QCheckBox()
+        self.skip_private.setChecked(True)
         for label, widget in (
             ("名称", self.name),
+            ("入站协议", self.protocol),
             ("监听地址", self.listen),
             ("端口", self.port),
             ("出口节点名称", self.node),
             ("路由模式", self.mode),
+            ("跳过私有地址", self.skip_private),
         ):
             form.addRow(label, widget)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+        if inbound:
+            self.name.setText(inbound.name)
+            self.listen.setText(inbound.listen)
+            self.port.setValue(inbound.port)
+            self._select_data(self.protocol, inbound.protocol)
+            self._select_data(self.node, inbound.node_id)
+            self._select_data(self.mode, inbound.route_mode)
+            self.skip_private.setChecked(inbound.skip_private)
+
+    @staticmethod
+    def _select_data(combo: QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
 
     def value(self) -> MixedInbound:
         node_id = self.node.currentData()
         if not node_id:
             raise ValueError("找不到指定的出口节点")
-        return MixedInbound(
-            name=self.name.text().strip(),
-            listen=self.listen.text().strip(),
-            port=self.port.value(),
-            node_id=str(node_id),
-            route_mode=str(self.mode.currentData()),
-        )
+        values = {
+            "name": self.name.text().strip(),
+            "listen": self.listen.text().strip(),
+            "port": self.port.value(),
+            "node_id": str(node_id),
+            "route_mode": str(self.mode.currentData()),
+            "protocol": str(self.protocol.currentData()),
+            "skip_private": self.skip_private.isChecked(),
+        }
+        return replace(self.inbound, **values) if self.inbound else MixedInbound(**values)
 
 
 class MainWindow(QMainWindow):
@@ -219,8 +262,10 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         self.node_table = QTableWidget(0, 4)
         self.node_table.setHorizontalHeaderLabels(["名称", "协议", "地址", "端口"])
-        self.inbound_table = QTableWidget(0, 5)
-        self.inbound_table.setHorizontalHeaderLabels(["名称", "监听", "端口", "出口", "路由"])
+        self.inbound_table = QTableWidget(0, 6)
+        self.inbound_table.setHorizontalHeaderLabels(
+            ["名称", "协议", "监听", "端口", "出口", "路由"]
+        )
         tabs.addTab(
             self._table_page(
                 self.node_table,
@@ -230,13 +275,19 @@ class MainWindow(QMainWindow):
                     ("从链接导入", self.import_node),
                     ("复制分享链接", self.copy_node_link),
                     ("测试节点", self.test_selected_node),
+                    ("编辑", self.edit_node),
                 ),
             ),
             "节点",
         )
         tabs.addTab(
-            self._table_page(self.inbound_table, self.add_inbound, self.remove_inbound),
-            "Mixed 入站",
+            self._table_page(
+                self.inbound_table,
+                self.add_inbound,
+                self.remove_inbound,
+                (("编辑", self.edit_inbound),),
+            ),
+            "入站",
         )
         tabs.addTab(self._settings_page(), "设置")
         layout.addWidget(tabs, 3)
@@ -250,6 +301,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(log_header)
         self.logs = QTextEdit()
         self.logs.setReadOnly(True)
+        self.logs.document().setMaximumBlockCount(500)
         layout.addWidget(self.logs, 2)
         self.setCentralWidget(central)
 
@@ -352,16 +404,20 @@ class MainWindow(QMainWindow):
         route_names = {
             "global": "全局",
             "bypass_cn": "跳过 CN",
-            "bypass_private": "跳过私有地址",
         }
+        protocol_names = {"mixed": "Mixed", "http": "HTTP", "socks": "SOCKS5"}
         self.inbound_table.setRowCount(len(self.config.inbounds))
         for row, item in enumerate(self.config.inbounds):
+            route_label = route_names.get(item.route_mode, item.route_mode)
+            if item.skip_private:
+                route_label += " / 私有直连"
             values = (
                 item.name,
+                protocol_names.get(item.protocol, item.protocol),
                 item.listen,
                 str(item.port),
                 names.get(item.node_id, "无效"),
-                route_names.get(item.route_mode, item.route_mode),
+                route_label,
             )
             for column, value in enumerate(values):
                 self.inbound_table.setItem(row, column, QTableWidgetItem(value))
@@ -372,6 +428,18 @@ class MainWindow(QMainWindow):
             self.config.nodes.append(dialog.value())
             self._save_refresh()
             self.audit(f"新增节点：{self.config.nodes[-1].name}")
+
+    def edit_node(self) -> None:
+        row = self.node_table.currentRow()
+        if row < 0:
+            self.error("请先选择节点")
+            return
+        original = self.config.nodes[row]
+        dialog = NodeDialog(self, original)
+        if dialog.exec():
+            self.config.nodes[row] = dialog.value()
+            self._save_refresh()
+            self.audit(f"编辑节点：{self.config.nodes[row].name}")
 
     def import_node(self) -> None:
         link, accepted = QInputDialog.getMultiLineText(self, "导入分享链接", "每行一个分享链接：")
@@ -447,6 +515,20 @@ class MainWindow(QMainWindow):
                 self.config.inbounds.append(dialog.value())
                 self._save_refresh()
                 self.audit(f"新增 Mixed 入站：{self.config.inbounds[-1].name}")
+            except ValueError as error:
+                self.error(str(error))
+
+    def edit_inbound(self) -> None:
+        row = self.inbound_table.currentRow()
+        if row < 0:
+            self.error("请先选择入站")
+            return
+        dialog = InboundDialog(self.config, self, self.config.inbounds[row])
+        if dialog.exec():
+            try:
+                self.config.inbounds[row] = dialog.value()
+                self._save_refresh()
+                self.audit(f"编辑入站：{self.config.inbounds[row].name}")
             except ValueError as error:
                 self.error(str(error))
 

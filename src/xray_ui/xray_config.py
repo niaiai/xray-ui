@@ -108,13 +108,15 @@ def build_xray_config(
     outbound_tags = {node.id: f"out-{index}" for index, node in enumerate(config.nodes, 1)}
     for index, inbound in enumerate(config.inbounds, 1):
         ports = internal_ports[inbound.id]
-        tags = [f"in-{index}-s", f"in-{index}-h"]
-        inbounds.extend(
-            [
+        tags: list[str] = []
+        if inbound.protocol in {"socks", "mixed"}:
+            tag = f"in-{index}-s"
+            tags.append(tag)
+            inbounds.append(
                 {
-                    "tag": tags[0],
-                    "listen": "127.0.0.1",
-                    "port": ports.socks,
+                    "tag": tag,
+                    "listen": "127.0.0.1" if inbound.protocol == "mixed" else inbound.listen,
+                    "port": ports.socks if inbound.protocol == "mixed" else inbound.port,
                     "protocol": "socks",
                     "settings": {"udp": True},
                     "sniffing": {
@@ -122,11 +124,16 @@ def build_xray_config(
                         "destOverride": ["http", "tls", "quic"],
                         "routeOnly": True,
                     },
-                },
+                }
+            )
+        if inbound.protocol in {"http", "mixed"}:
+            tag = f"in-{index}-h"
+            tags.append(tag)
+            inbounds.append(
                 {
-                    "tag": tags[1],
-                    "listen": "127.0.0.1",
-                    "port": ports.http,
+                    "tag": tag,
+                    "listen": "127.0.0.1" if inbound.protocol == "mixed" else inbound.listen,
+                    "port": ports.http if inbound.protocol == "mixed" else inbound.port,
                     "protocol": "http",
                     "settings": {},
                     "sniffing": {
@@ -134,9 +141,17 @@ def build_xray_config(
                         "destOverride": ["http", "tls"],
                         "routeOnly": True,
                     },
-                },
-            ]
-        )
+                }
+            )
+        if inbound.skip_private:
+            rules.append(
+                {
+                    "type": "field",
+                    "inboundTag": tags,
+                    "ip": ["geoip:private"],
+                    "outboundTag": "direct",
+                }
+            )
         if inbound.route_mode == "bypass_cn":
             rules.append(
                 {
@@ -150,16 +165,7 @@ def build_xray_config(
                 {
                     "type": "field",
                     "inboundTag": tags,
-                    "ip": ["geoip:private", "geoip:cn"],
-                    "outboundTag": "direct",
-                }
-            )
-        elif inbound.route_mode == "bypass_private":
-            rules.append(
-                {
-                    "type": "field",
-                    "inboundTag": tags,
-                    "ip": ["geoip:private"],
+                    "ip": ["geoip:cn"],
                     "outboundTag": "direct",
                 }
             )

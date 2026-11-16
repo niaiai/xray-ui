@@ -19,17 +19,22 @@ def test_global_routes_both_internal_inbounds_to_selected_node():
 def test_bypass_cn_rules_precede_default_node_rule():
     config, _node, inbound = sample_config("bypass_cn")
     rules = build_xray_config(config, {inbound.id: InternalPorts(31001, 31002)})["routing"]["rules"]
-    assert rules[0]["domain"] == ["geosite:cn"]
-    assert rules[1]["ip"] == ["geoip:private", "geoip:cn"]
-    assert rules[2]["outboundTag"] == "out-1"
+    assert rules[0]["ip"] == ["geoip:private"]
+    assert rules[1]["domain"] == ["geosite:cn"]
+    assert rules[2]["ip"] == ["geoip:cn"]
+    assert rules[3]["outboundTag"] == "out-1"
 
 
-def test_bypass_private_only_routes_private_ip_directly():
-    config, _node, inbound = sample_config("bypass_private")
+def test_private_bypass_is_enabled_by_default_and_can_be_disabled():
+    config, _node, inbound = sample_config()
     rules = build_xray_config(config, {inbound.id: InternalPorts(31001, 31002)})["routing"]["rules"]
     assert rules[0]["ip"] == ["geoip:private"]
     assert rules[0]["inboundTag"] == ["in-1-s", "in-1-h"]
     assert rules[1]["outboundTag"] == "out-1"
+    inbound.skip_private = False
+    rules = build_xray_config(config, {inbound.id: InternalPorts(31001, 31002)})["routing"]["rules"]
+    assert len(rules) == 1
+    assert rules[0]["outboundTag"] == "out-1"
 
 
 def test_runtime_tags_are_short_and_stable():
@@ -61,3 +66,20 @@ def test_custom_domains_are_normalized():
     assert rules[0]["domain"] == ["domain:example.com", "domain:example.org", "full:a.test"]
     assert "inboundTag" not in rules[0]
     assert normalize_domain("geosite:google") == "geosite:google"
+
+
+def test_single_protocol_inbounds_listen_on_public_port_without_mixed_frontend():
+    config, _, inbound = sample_config()
+    inbound.protocol = "http"
+    result = build_xray_config(config, {inbound.id: InternalPorts(31001, 31002)})
+    assert len(result["inbounds"]) == 1
+    assert result["inbounds"][0]["protocol"] == "http"
+    assert result["inbounds"][0]["port"] == 10808
+    assert result["routing"]["rules"][-1]["inboundTag"] == ["in-1-h"]
+
+    inbound.protocol = "socks"
+    result = build_xray_config(config, {inbound.id: InternalPorts(31001, 31002)})
+    assert len(result["inbounds"]) == 1
+    assert result["inbounds"][0]["protocol"] == "socks"
+    assert result["inbounds"][0]["port"] == 10808
+    assert result["routing"]["rules"][-1]["inboundTag"] == ["in-1-s"]

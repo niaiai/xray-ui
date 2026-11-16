@@ -63,7 +63,11 @@ class MixedProxy:
             first = client.recv(1, socket.MSG_PEEK)
             if not first:
                 return
-            target_port = self.target.socks_port if first[0] in (4, 5) else self.target.http_port
+            if first[0] == 4:
+                # Mixed 入口仅保证 SOCKS5；明确拒绝 SOCKS4，避免按 HTTP 误处理或长时间等待。
+                client.sendall(b"\x00\x5b\x00\x00\x00\x00\x00\x00")
+                return
+            target_port = self.target.socks_port if first[0] == 5 else self.target.http_port
             upstream = socket.create_connection(("127.0.0.1", target_port), timeout=5)
             client.setblocking(False)
             upstream.setblocking(False)

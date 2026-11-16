@@ -4,9 +4,9 @@
 
 ## 当前功能
 
-- 多个单端口 Mixed 入站（同一端口同时接受 SOCKS4/5 与 HTTP）
+- 支持 HTTP、SOCKS5、单端口 Mixed（HTTP + SOCKS5）三种入站
 - 每个 Mixed 入站独立绑定出口节点
-- 每个入站可选全局、跳过 CN、跳过私有地址三种路由模式
+- 每个入站可选全局或跳过 CN，另有默认开启的“跳过私有地址”开关
 - 全局直连域名规则独立配置，对所有入站生效
 - VLESS、VMess、Trojan、Shadowsocks、SOCKS、HTTP 出口基础配置
 - 配置使用 `%LOCALAPPDATA%\xray-ui\config.json` 保存
@@ -16,7 +16,8 @@
 - 保留 VLESS Encryption、VMess 加密、TLS/REALITY、ALPN、WebSocket、gRPC、XHTTP 等分享参数
 - 通过临时 Xray HTTP 入站实际测试节点连通性和响应耗时
 - 启动前执行 Xray 配置校验，捕获运行日志，停止时清理进程树
-- 日志固定显示在主窗口底部，支持清空；UI 操作和 Xray 输出同时写入滚动日志文件
+- 日志固定显示在主窗口底部，最多保留最新 500 行并支持清空
+- 节点和入站均支持编辑
 - 不修改 Windows 系统代理
 
 ## 开发运行

@@ -77,6 +77,7 @@ class XrayProcessManager:
                 item.listen, item.port, assignments[item.id].socks, assignments[item.id].http
             )
             for item in config.inbounds
+            if item.protocol == "mixed"
         ]
         try:
             self.mixed.start(targets)
