@@ -9,7 +9,8 @@
 - 每个入站可选全局或跳过 CN，另有默认开启的“跳过私有地址”开关
 - 全局直连域名规则独立配置，对所有入站生效
 - VLESS、VMess、Trojan、Shadowsocks、SOCKS、HTTP 出口基础配置
-- 配置使用 `%LOCALAPPDATA%\xray-ui\config.json` 保存
+- 应用配置保存为程序同目录的 `config.json`
+- Xray 运行配置保存为程序同目录的 `xray-runtime.json`
 - 自动下载/更新官方 Xray-core，支持 ghproxy URL 前缀
 - 从 `vless://`、`vmess://`、`trojan://`、`ss://`、`socks://`、`http://` 分享链接导入节点
 - 将节点重新生成分享链接并复制到剪贴板

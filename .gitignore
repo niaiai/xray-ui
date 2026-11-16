@@ -12,4 +12,6 @@ dist/
 Thumbs.db
 Desktop.ini
 .protocol-validation/
+/config.json
+/xray-runtime.json
 

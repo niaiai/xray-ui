@@ -68,3 +68,19 @@ def test_ghproxy_is_enabled_by_default_and_empty_old_value_is_migrated():
     migrated = AppSettings.from_dict({"ghproxy": ""})
     assert migrated.use_ghproxy is True
     assert migrated.ghproxy == "https://gh-proxy.com"
+
+
+def test_default_store_migrates_legacy_config_next_to_application(tmp_path, monkeypatch):
+    app_dir = tmp_path / "app"
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    legacy_config = legacy_dir / "config.json"
+    legacy_config.write_text('{"schema_version": 1, "nodes": []}', encoding="utf-8")
+    monkeypatch.setattr("xray_ui.storage.application_dir", lambda: app_dir)
+    monkeypatch.setattr("xray_ui.storage.default_data_dir", lambda: legacy_dir)
+    store = JsonConfigStore()
+    loaded = store.load()
+    assert loaded.schema_version == 1
+    assert store.path == app_dir / "config.json"
+    assert store.path.exists()
+    assert legacy_config.exists()

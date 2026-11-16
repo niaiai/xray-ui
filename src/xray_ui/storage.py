@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -23,9 +24,13 @@ def application_dir() -> Path:
 
 class JsonConfigStore:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or default_data_dir() / "config.json"
+        self.path = path or application_dir() / "config.json"
+        self.legacy_path = default_data_dir() / "config.json" if path is None else None
 
     def load(self) -> AppConfig:
+        if not self.path.exists() and self.legacy_path is not None and self.legacy_path.exists():
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(self.legacy_path, self.path)
         if not self.path.exists():
             return AppConfig()
         with self.path.open("r", encoding="utf-8") as file:

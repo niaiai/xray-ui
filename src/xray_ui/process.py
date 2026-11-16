@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .mixed_proxy import MixedProxyGroup, MixedTarget
 from .models import AppConfig
-from .storage import default_data_dir
+from .storage import application_dir
 from .xray_config import InternalPorts, build_xray_config
 
 
@@ -45,9 +45,7 @@ class XrayProcessManager:
             zip((item.id for item in config.inbounds), reserve_internal_ports(len(config.inbounds)))
         )
         runtime = build_xray_config(config, assignments)
-        runtime_dir = default_data_dir() / "runtime"
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-        config_path = runtime_dir / "xray.json"
+        config_path = application_dir() / "xray-runtime.json"
         config_path.write_text(json.dumps(runtime, ensure_ascii=False, indent=2), encoding="utf-8")
         executable = xray_dir / "xray.exe"
         if not executable.exists():
