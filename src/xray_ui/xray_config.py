@@ -35,7 +35,7 @@ def _stream_settings(node: Node) -> dict[str, Any]:
     return stream
 
 
-def _outbound(node: Node) -> dict[str, Any]:
+def _outbound(node: Node, tag: str) -> dict[str, Any]:
     settings: dict[str, Any]
     if node.protocol == "vless":
         settings = {
@@ -62,7 +62,7 @@ def _outbound(node: Node) -> dict[str, Any]:
             username, _, password = node.credential.partition(":")
             settings["servers"][0]["users"] = [{"user": username, "pass": password}]
     outbound: dict[str, Any] = {
-        "tag": f"node-{node.id}",
+        "tag": tag,
         "protocol": node.protocol,
         "settings": settings,
     }
@@ -80,9 +80,10 @@ def build_xray_config(
 
     inbounds: list[dict[str, Any]] = []
     rules: list[dict[str, Any]] = []
-    for inbound in config.inbounds:
+    outbound_tags = {node.id: f"out-{index}" for index, node in enumerate(config.nodes, 1)}
+    for index, inbound in enumerate(config.inbounds, 1):
         ports = internal_ports[inbound.id]
-        tags = [f"mixed-{inbound.id}-socks", f"mixed-{inbound.id}-http"]
+        tags = [f"in-{index}-s", f"in-{index}-h"]
         inbounds.extend(
             [
                 {
@@ -137,14 +138,14 @@ def build_xray_config(
             {
                 "type": "field",
                 "inboundTag": tags,
-                "outboundTag": f"node-{inbound.node_id}",
+                "outboundTag": outbound_tags[inbound.node_id],
             }
         )
 
     return {
         "log": {"loglevel": "warning"},
         "inbounds": inbounds,
-        "outbounds": [_outbound(node) for node in config.nodes]
+        "outbounds": [_outbound(node, outbound_tags[node.id]) for node in config.nodes]
         + [{"tag": "direct", "protocol": "freedom", "settings": {}}],
         "routing": {"domainStrategy": "IPIfNonMatch", "rules": rules},
     }

@@ -9,19 +9,26 @@ def sample_config(mode="global", domains=None):
 
 
 def test_global_routes_both_internal_inbounds_to_selected_node():
-    config, node, inbound = sample_config()
+    config, _node, inbound = sample_config()
     result = build_xray_config(config, {inbound.id: InternalPorts(31001, 31002)})
     assert len(result["inbounds"]) == 2
-    assert result["routing"]["rules"][-1]["outboundTag"] == f"node-{node.id}"
+    assert result["routing"]["rules"][-1]["outboundTag"] == "out-1"
     assert len(result["routing"]["rules"][-1]["inboundTag"]) == 2
 
 
 def test_bypass_cn_rules_precede_default_node_rule():
-    config, node, inbound = sample_config("bypass_cn")
+    config, _node, inbound = sample_config("bypass_cn")
     rules = build_xray_config(config, {inbound.id: InternalPorts(31001, 31002)})["routing"]["rules"]
     assert rules[0]["domain"] == ["geosite:cn"]
     assert rules[1]["ip"] == ["geoip:private", "geoip:cn"]
-    assert rules[2]["outboundTag"] == f"node-{node.id}"
+    assert rules[2]["outboundTag"] == "out-1"
+
+
+def test_runtime_tags_are_short_and_stable():
+    config, _, inbound = sample_config()
+    result = build_xray_config(config, {inbound.id: InternalPorts(31001, 31002)})
+    assert [item["tag"] for item in result["inbounds"]] == ["in-1-s", "in-1-h"]
+    assert result["outbounds"][0]["tag"] == "out-1"
 
 
 def test_custom_domains_are_normalized():

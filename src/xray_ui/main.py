@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from .app_logging import configure_logging
 from .models import AppConfig, MixedInbound, Node
+from .node_tester import test_node
 from .process import XrayProcessManager
 from .share_links import build_share_link, parse_share_link
 from .storage import JsonConfigStore, default_data_dir
@@ -57,6 +59,23 @@ class UpdateWorker(QThread):
             self.done.emit(f"Xray-core 已更新到 {release.version}")
         except Exception as error:
             self.failed.emit(str(error))
+
+
+class NodeTestWorker(QThread):
+    done = Signal(str, int)
+    failed = Signal(str, str)
+
+    def __init__(self, node: Node, xray_dir: Path) -> None:
+        super().__init__()
+        self.node = node
+        self.xray_dir = xray_dir
+
+    def run(self) -> None:
+        try:
+            result = test_node(self.node, self.xray_dir)
+            self.done.emit(self.node.name, result.elapsed_ms)
+        except Exception as error:
+            self.failed.emit(self.node.name, str(error))
 
 
 class LogBridge(QObject):
@@ -172,6 +191,7 @@ class MainWindow(QMainWindow):
         self.log_bridge.message.connect(self.append_log)
         self.manager = XrayProcessManager(self.log_bridge.message.emit)
         self.worker: UpdateWorker | None = None
+        self.test_worker: NodeTestWorker | None = None
         self.exiting = False
         self.setWindowTitle("Xray UI")
         self.resize(920, 620)
@@ -209,7 +229,11 @@ class MainWindow(QMainWindow):
                 self.node_table,
                 self.add_node,
                 self.remove_node,
-                (("从链接导入", self.import_node), ("复制分享链接", self.copy_node_link)),
+                (
+                    ("从链接导入", self.import_node),
+                    ("复制分享链接", self.copy_node_link),
+                    ("测试节点", self.test_selected_node),
+                ),
             ),
             "节点",
         )
@@ -363,6 +387,29 @@ class MainWindow(QMainWindow):
         self.audit(f"复制节点分享链接：{node.name}")
         self.tray.showMessage("Xray UI", "分享链接已复制到剪贴板")
 
+    def test_selected_node(self) -> None:
+        row = self.node_table.currentRow()
+        if row < 0:
+            self.error("请先选择节点")
+            return
+        if self.test_worker and self.test_worker.isRunning():
+            self.error("已有节点正在测试")
+            return
+        node = self.config.nodes[row]
+        self.audit(f"开始测试节点：{node.name}")
+        self.test_worker = NodeTestWorker(node, Path(self.config.settings.xray_dir))
+        self.test_worker.done.connect(self._node_test_done)
+        self.test_worker.failed.connect(self._node_test_failed)
+        self.test_worker.start()
+
+    def _node_test_done(self, name: str, elapsed_ms: int) -> None:
+        message = f"节点 {name} 测试成功：{elapsed_ms} ms"
+        self.audit(message)
+        QMessageBox.information(self, "节点测试", message)
+
+    def _node_test_failed(self, name: str, reason: str) -> None:
+        self.error(f"节点 {name} 测试失败：{reason}")
+
     def remove_node(self) -> None:
         row = self.node_table.currentRow()
         if row >= 0:
@@ -441,13 +488,17 @@ class MainWindow(QMainWindow):
             self.error(str(error))
 
     def append_log(self, text: str) -> None:
-        self.logs.append(text)
+        self.logs.append(f"[{self._log_time()}] [XRAY] {text}")
         self.logger.info("[XRAY] %s", text)
 
     def audit(self, text: str) -> None:
-        line = f"[UI] {text}"
+        line = f"[{self._log_time()}] [UI] {text}"
         self.logs.append(line)
-        self.logger.info(line)
+        self.logger.info("[UI] %s", text)
+
+    @staticmethod
+    def _log_time() -> str:
+        return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
     def _update_done(self, text: str) -> None:
         self.audit(text)
@@ -456,7 +507,7 @@ class MainWindow(QMainWindow):
     def error(self, text: str) -> None:
         self.logger.error("[UI] %s", text)
         if hasattr(self, "logs"):
-            self.logs.append(f"[错误] {text}")
+            self.logs.append(f"[{self._log_time()}] [错误] {text}")
         QMessageBox.critical(self, "错误", text)
 
     def closeEvent(self, event) -> None:
