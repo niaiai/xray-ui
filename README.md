@@ -16,7 +16,7 @@
 - 将节点重新生成分享链接并复制到剪贴板
 - 保留 VLESS Encryption、VMess 加密、TLS/REALITY、ALPN、WebSocket、gRPC、XHTTP 等分享参数
 - 通过临时 Xray HTTP 入站实际测试节点连通性和响应耗时
-- 入站出口可选择单节点或由 Xray Round Robin 轮询全部节点
+- 入站出口可选择单节点，或勾选部分/全部节点进行 Xray Round Robin 轮询
 - 默认从程序当前目录管理 `xray.exe`、`geoip.dat` 和 `geosite.dat`
 - 默认启用已验证可用的 `https://gh-proxy.com`，可在设置中取消勾选
 - 启动前执行 Xray 配置校验，捕获运行日志，停止时清理进程树

@@ -172,10 +172,11 @@ def build_xray_config(
             )
         if inbound.round_robin:
             balancer_tag = f"bal-{index}"
+            selected_ids = inbound.round_robin_node_ids or list(outbound_tags)
             balancers.append(
                 {
                     "tag": balancer_tag,
-                    "selector": list(outbound_tags.values()),
+                    "selector": [outbound_tags[node_id] for node_id in selected_ids],
                     "strategy": {"type": "roundRobin"},
                 }
             )

@@ -64,6 +64,7 @@ class MixedInbound:
     protocol: InboundProtocol = "mixed"
     skip_private: bool = True
     round_robin: bool = False
+    round_robin_node_ids: list[str] = field(default_factory=list)
     custom_domains: list[str] = field(default_factory=list)
     id: str = field(default_factory=new_id)
 
@@ -153,6 +154,11 @@ class AppConfig:
                 errors.append(f"入站 {inbound.name} 的路由模式无效")
             if inbound.protocol not in {"http", "socks", "mixed"}:
                 errors.append(f"入站 {inbound.name} 的协议无效")
-            if inbound.round_robin and len(self.nodes) < 2:
-                errors.append(f"入站 {inbound.name} 启用轮询时至少需要两个节点")
+            if inbound.round_robin:
+                selected = inbound.round_robin_node_ids or list(node_ids)
+                invalid = set(selected) - node_ids
+                if invalid:
+                    errors.append(f"入站 {inbound.name} 的轮询节点已失效")
+                if len(set(selected)) < 2:
+                    errors.append(f"入站 {inbound.name} 启用轮询时至少需要两个节点")
         return errors

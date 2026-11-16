@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -165,6 +167,7 @@ class InboundDialog(QDialog):
         self.inbound = inbound
         self.setWindowTitle("编辑入站" if inbound else "新增入站")
         form = QFormLayout(self)
+        self.form = form
         self.name = QLineEdit()
         self.listen = QLineEdit("127.0.0.1")
         self.port = QSpinBox()
@@ -176,8 +179,18 @@ class InboundDialog(QDialog):
         self.node = QComboBox()
         for node in config.nodes:
             self.node.addItem(node.name, node.id)
-        if len(config.nodes) >= 2:
-            self.node.addItem("轮询全部节点", "__round_robin__")
+        self.outbound_mode = QComboBox()
+        self.outbound_mode.addItem("单节点", "single")
+        self.outbound_mode.addItem("轮询", "round_robin")
+        self.round_robin_all = QCheckBox("全部")
+        self.round_robin_nodes = QListWidget()
+        self.round_robin_nodes.setMaximumHeight(130)
+        for node in config.nodes:
+            item = QListWidgetItem(node.name)
+            item.setData(Qt.ItemDataRole.UserRole, node.id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.round_robin_nodes.addItem(item)
         self.mode = QComboBox()
         for label, value in self.MODES.items():
             self.mode.addItem(label, value)
@@ -188,7 +201,10 @@ class InboundDialog(QDialog):
             ("入站协议", self.protocol),
             ("监听地址", self.listen),
             ("端口", self.port),
-            ("出口节点名称", self.node),
+            ("出口方式", self.outbound_mode),
+            ("单节点", self.node),
+            ("轮询节点", self.round_robin_all),
+            ("", self.round_robin_nodes),
             ("路由模式", self.mode),
             ("跳过私有地址", self.skip_private),
         ):
@@ -197,16 +213,28 @@ class InboundDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+        self.outbound_mode.currentIndexChanged.connect(self._update_outbound_visibility)
+        self.round_robin_all.toggled.connect(self._toggle_all_nodes)
+        self.round_robin_nodes.itemChanged.connect(self._update_all_state)
         if inbound:
             self.name.setText(inbound.name)
             self.listen.setText(inbound.listen)
             self.port.setValue(inbound.port)
             self._select_data(self.protocol, inbound.protocol)
+            self._select_data(self.node, inbound.node_id)
             self._select_data(
-                self.node, "__round_robin__" if inbound.round_robin else inbound.node_id
+                self.outbound_mode, "round_robin" if inbound.round_robin else "single"
             )
+            selected_ids = set(inbound.round_robin_node_ids)
+            select_all = inbound.round_robin and not selected_ids
+            for index in range(self.round_robin_nodes.count()):
+                item = self.round_robin_nodes.item(index)
+                if select_all or item.data(Qt.ItemDataRole.UserRole) in selected_ids:
+                    item.setCheckState(Qt.CheckState.Checked)
             self._select_data(self.mode, inbound.route_mode)
             self.skip_private.setChecked(inbound.skip_private)
+        self._update_all_state()
+        self._update_outbound_visibility()
 
     @staticmethod
     def _select_data(combo: QComboBox, value: str) -> None:
@@ -214,12 +242,47 @@ class InboundDialog(QDialog):
         if index >= 0:
             combo.setCurrentIndex(index)
 
+    def _update_outbound_visibility(self) -> None:
+        round_robin = self.outbound_mode.currentData() == "round_robin"
+        self.node.setVisible(not round_robin)
+        self.form.labelForField(self.node).setVisible(not round_robin)
+        self.round_robin_all.setVisible(round_robin)
+        self.form.labelForField(self.round_robin_all).setVisible(round_robin)
+        self.round_robin_nodes.setVisible(round_robin)
+
+    def _toggle_all_nodes(self, checked: bool) -> None:
+        self.round_robin_nodes.blockSignals(True)
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for index in range(self.round_robin_nodes.count()):
+            self.round_robin_nodes.item(index).setCheckState(state)
+        self.round_robin_nodes.blockSignals(False)
+
+    def _update_all_state(self) -> None:
+        count = self.round_robin_nodes.count()
+        checked = sum(
+            self.round_robin_nodes.item(index).checkState() == Qt.CheckState.Checked
+            for index in range(count)
+        )
+        self.round_robin_all.blockSignals(True)
+        self.round_robin_all.setChecked(count > 0 and checked == count)
+        self.round_robin_all.blockSignals(False)
+
+    def _selected_round_robin_nodes(self) -> list[str]:
+        return [
+            str(self.round_robin_nodes.item(index).data(Qt.ItemDataRole.UserRole))
+            for index in range(self.round_robin_nodes.count())
+            if self.round_robin_nodes.item(index).checkState() == Qt.CheckState.Checked
+        ]
+
     def value(self) -> MixedInbound:
         node_id = self.node.currentData()
         if not node_id:
             raise ValueError("找不到指定的出口节点")
-        round_robin = node_id == "__round_robin__"
-        selected_node_id = self.config.nodes[0].id if round_robin else str(node_id)
+        round_robin = self.outbound_mode.currentData() == "round_robin"
+        selected_ids = self._selected_round_robin_nodes() if round_robin else []
+        if round_robin and len(selected_ids) < 2:
+            raise ValueError("轮询出口至少选择两个节点")
+        selected_node_id = selected_ids[0] if round_robin else str(node_id)
         values = {
             "name": self.name.text().strip(),
             "listen": self.listen.text().strip(),
@@ -229,6 +292,7 @@ class InboundDialog(QDialog):
             "protocol": str(self.protocol.currentData()),
             "skip_private": self.skip_private.isChecked(),
             "round_robin": round_robin,
+            "round_robin_node_ids": selected_ids,
         }
         return replace(self.inbound, **values) if self.inbound else MixedInbound(**values)
 
@@ -465,12 +529,21 @@ class MainWindow(QMainWindow):
             route_label = route_names.get(item.route_mode, item.route_mode)
             if item.skip_private:
                 route_label += " / 私有直连"
+            selected_count = len(item.round_robin_node_ids)
+            all_nodes = not item.round_robin_node_ids or selected_count == len(self.config.nodes)
+            outbound_label = (
+                "轮询：全部"
+                if item.round_robin and all_nodes
+                else f"轮询：{selected_count} 个节点"
+                if item.round_robin
+                else names.get(item.node_id, "无效")
+            )
             values = (
                 item.name,
                 protocol_names.get(item.protocol, item.protocol),
                 item.listen,
                 str(item.port),
-                "轮询全部节点" if item.round_robin else names.get(item.node_id, "无效"),
+                outbound_label,
                 route_label,
             )
             for column, value in enumerate(values):
@@ -579,7 +652,14 @@ class MainWindow(QMainWindow):
         row = self.node_table.currentRow()
         if row >= 0:
             node_id = self.config.nodes[row].id
-            if any(item.node_id == node_id or item.round_robin for item in self.config.inbounds):
+            if any(
+                item.node_id == node_id
+                or (
+                    item.round_robin
+                    and (not item.round_robin_node_ids or node_id in item.round_robin_node_ids)
+                )
+                for item in self.config.inbounds
+            ):
                 self.error("该节点仍被入站使用")
                 return
             self.config.nodes.pop(row)

@@ -101,3 +101,23 @@ def test_inbound_can_round_robin_all_outbound_nodes():
         }
     ]
     assert result["routing"]["rules"][-1]["balancerTag"] == "bal-1"
+
+
+def test_inbound_can_round_robin_selected_nodes_only():
+    nodes = [
+        Node("一", "vless", "one.example.com", 443, "uuid-1", security="tls"),
+        Node("二", "vless", "two.example.com", 443, "uuid-2", security="tls"),
+        Node("三", "trojan", "three.example.com", 443, "password", security="tls"),
+    ]
+    inbound = MixedInbound(
+        "部分轮询",
+        10808,
+        nodes[0].id,
+        round_robin=True,
+        round_robin_node_ids=[nodes[0].id, nodes[2].id],
+    )
+    result = build_xray_config(
+        AppConfig(nodes=nodes, inbounds=[inbound]),
+        {inbound.id: InternalPorts(31001, 31002)},
+    )
+    assert result["routing"]["balancers"][0]["selector"] == ["out-1", "out-3"]
