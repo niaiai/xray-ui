@@ -1,6 +1,6 @@
 import json
 
-from xray_ui.models import AppConfig, MixedInbound, Node
+from xray_ui.models import AppConfig, AppSettings, MixedInbound, Node
 from xray_ui.storage import JsonConfigStore
 
 
@@ -59,3 +59,12 @@ def test_old_per_inbound_custom_domains_are_migrated_to_global(tmp_path):
     config = JsonConfigStore(path).load()
     assert config.inbounds[0].route_mode == "global"
     assert config.direct_domains == ["example.com"]
+
+
+def test_ghproxy_is_enabled_by_default_and_empty_old_value_is_migrated():
+    defaults = AppSettings.from_dict({})
+    assert defaults.use_ghproxy is True
+    assert defaults.ghproxy == "https://gh-proxy.com"
+    migrated = AppSettings.from_dict({"ghproxy": ""})
+    assert migrated.use_ghproxy is True
+    assert migrated.ghproxy == "https://gh-proxy.com"

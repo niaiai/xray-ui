@@ -102,6 +102,7 @@ def build_xray_config(
 
     inbounds: list[dict[str, Any]] = []
     rules: list[dict[str, Any]] = []
+    balancers: list[dict[str, Any]] = []
     direct_domains = [normalize_domain(value) for value in config.direct_domains if value.strip()]
     if direct_domains:
         rules.append({"type": "field", "domain": direct_domains, "outboundTag": "direct"})
@@ -169,20 +170,35 @@ def build_xray_config(
                     "outboundTag": "direct",
                 }
             )
-        rules.append(
-            {
-                "type": "field",
-                "inboundTag": tags,
-                "outboundTag": outbound_tags[inbound.node_id],
-            }
-        )
+        if inbound.round_robin:
+            balancer_tag = f"bal-{index}"
+            balancers.append(
+                {
+                    "tag": balancer_tag,
+                    "selector": list(outbound_tags.values()),
+                    "strategy": {"type": "roundRobin"},
+                }
+            )
+            rules.append({"type": "field", "inboundTag": tags, "balancerTag": balancer_tag})
+        else:
+            rules.append(
+                {
+                    "type": "field",
+                    "inboundTag": tags,
+                    "outboundTag": outbound_tags[inbound.node_id],
+                }
+            )
 
     return {
         "log": {"loglevel": "warning"},
         "inbounds": inbounds,
         "outbounds": [_outbound(node, outbound_tags[node.id]) for node in config.nodes]
         + [{"tag": "direct", "protocol": "freedom", "settings": {}}],
-        "routing": {"domainStrategy": "IPIfNonMatch", "rules": rules},
+        "routing": {
+            "domainStrategy": "IPIfNonMatch",
+            "rules": rules,
+            "balancers": balancers,
+        },
     }
 
 

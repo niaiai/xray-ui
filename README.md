@@ -5,7 +5,7 @@
 ## 当前功能
 
 - 支持 HTTP、SOCKS5、单端口 Mixed（HTTP + SOCKS5）三种入站
-- 每个 Mixed 入站独立绑定出口节点
+- 每个入站可绑定单个出口节点或轮询全部节点
 - 每个入站可选全局或跳过 CN，另有默认开启的“跳过私有地址”开关
 - 全局直连域名规则独立配置，对所有入站生效
 - VLESS、VMess、Trojan、Shadowsocks、SOCKS、HTTP 出口基础配置
@@ -15,11 +15,21 @@
 - 将节点重新生成分享链接并复制到剪贴板
 - 保留 VLESS Encryption、VMess 加密、TLS/REALITY、ALPN、WebSocket、gRPC、XHTTP 等分享参数
 - 通过临时 Xray HTTP 入站实际测试节点连通性和响应耗时
-- 支持按顺序轮询全部节点，并在表格显示延迟或失败状态
+- 入站出口可选择单节点或由 Xray Round Robin 轮询全部节点
+- 默认从程序当前目录管理 `xray.exe`、`geoip.dat` 和 `geosite.dat`
+- 默认启用已验证可用的 `https://gh-proxy.com`，可在设置中取消勾选
 - 启动前执行 Xray 配置校验，捕获运行日志，停止时清理进程树
 - 日志固定显示在主窗口底部，最多保留最新 500 行并支持清空
 - 节点和入站均支持编辑
 - 不修改 Windows 系统代理
+
+## Windows 打包
+
+```powershell
+.\scripts\build.ps1
+```
+
+输出为 `dist\XrayUI.exe`，使用 Windows GUI 子系统，不显示控制台黑框。
 
 ## 开发运行
 

@@ -63,6 +63,7 @@ class MixedInbound:
     route_mode: RouteMode = "global"
     protocol: InboundProtocol = "mixed"
     skip_private: bool = True
+    round_robin: bool = False
     custom_domains: list[str] = field(default_factory=list)
     id: str = field(default_factory=new_id)
 
@@ -74,14 +75,19 @@ class MixedInbound:
 @dataclass(slots=True)
 class AppSettings:
     xray_dir: str = ""
-    ghproxy: str = ""
+    ghproxy: str = "https://gh-proxy.com"
+    use_ghproxy: bool = True
     auto_update: bool = True
     auto_start_xray: bool = False
     start_with_windows: bool = False
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> AppSettings:
-        return cls(**value)
+        migrated = dict(value)
+        if not migrated.get("ghproxy"):
+            migrated["ghproxy"] = "https://gh-proxy.com"
+        migrated.setdefault("use_ghproxy", True)
+        return cls(**migrated)
 
 
 @dataclass(slots=True)
@@ -147,4 +153,6 @@ class AppConfig:
                 errors.append(f"入站 {inbound.name} 的路由模式无效")
             if inbound.protocol not in {"http", "socks", "mixed"}:
                 errors.append(f"入站 {inbound.name} 的协议无效")
+            if inbound.round_robin and len(self.nodes) < 2:
+                errors.append(f"入站 {inbound.name} 启用轮询时至少需要两个节点")
         return errors

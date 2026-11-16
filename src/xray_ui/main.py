@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QColor
+from PySide6.QtGui import QAction, QColor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -40,9 +40,14 @@ from .models import AppConfig, MixedInbound, Node
 from .node_tester import test_node
 from .process import XrayProcessManager
 from .share_links import build_share_link, parse_share_link
-from .storage import JsonConfigStore, default_data_dir
+from .storage import JsonConfigStore, application_dir, default_data_dir
 from .updater import XrayUpdater
 from .windows import set_start_with_windows
+
+
+def resource_path(relative: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", application_dir()))
+    return base / relative
 
 
 class UpdateWorker(QThread):
@@ -80,25 +85,6 @@ class NodeTestWorker(QThread):
             self.done.emit(self.node.id, self.node.name, result.elapsed_ms)
         except Exception as error:
             self.failed.emit(self.node.id, self.node.name, str(error))
-
-
-class NodePollWorker(QThread):
-    result = Signal(str, str, bool)
-
-    def __init__(self, nodes: list[Node], xray_dir: Path) -> None:
-        super().__init__()
-        self.nodes = nodes
-        self.xray_dir = xray_dir
-
-    def run(self) -> None:
-        for node in self.nodes:
-            if self.isInterruptionRequested():
-                break
-            try:
-                tested = test_node(node, self.xray_dir)
-                self.result.emit(node.id, f"{tested.elapsed_ms} ms", True)
-            except Exception as error:
-                self.result.emit(node.id, f"失败：{error}", False)
 
 
 class LogBridge(QObject):
@@ -190,6 +176,8 @@ class InboundDialog(QDialog):
         self.node = QComboBox()
         for node in config.nodes:
             self.node.addItem(node.name, node.id)
+        if len(config.nodes) >= 2:
+            self.node.addItem("轮询全部节点", "__round_robin__")
         self.mode = QComboBox()
         for label, value in self.MODES.items():
             self.mode.addItem(label, value)
@@ -214,7 +202,9 @@ class InboundDialog(QDialog):
             self.listen.setText(inbound.listen)
             self.port.setValue(inbound.port)
             self._select_data(self.protocol, inbound.protocol)
-            self._select_data(self.node, inbound.node_id)
+            self._select_data(
+                self.node, "__round_robin__" if inbound.round_robin else inbound.node_id
+            )
             self._select_data(self.mode, inbound.route_mode)
             self.skip_private.setChecked(inbound.skip_private)
 
@@ -228,14 +218,17 @@ class InboundDialog(QDialog):
         node_id = self.node.currentData()
         if not node_id:
             raise ValueError("找不到指定的出口节点")
+        round_robin = node_id == "__round_robin__"
+        selected_node_id = self.config.nodes[0].id if round_robin else str(node_id)
         values = {
             "name": self.name.text().strip(),
             "listen": self.listen.text().strip(),
             "port": self.port.value(),
-            "node_id": str(node_id),
+            "node_id": selected_node_id,
             "route_mode": str(self.mode.currentData()),
             "protocol": str(self.protocol.currentData()),
             "skip_private": self.skip_private.isChecked(),
+            "round_robin": round_robin,
         }
         return replace(self.inbound, **values) if self.inbound else MixedInbound(**values)
 
@@ -246,14 +239,14 @@ class MainWindow(QMainWindow):
         self.store = JsonConfigStore()
         self.logger = configure_logging()
         self.config = self.store.load()
-        if not self.config.settings.xray_dir:
-            self.config.settings.xray_dir = str(default_data_dir() / "core")
+        legacy_xray_dir = str(default_data_dir() / "core")
+        if not self.config.settings.xray_dir or self.config.settings.xray_dir == legacy_xray_dir:
+            self.config.settings.xray_dir = str(application_dir())
         self.log_bridge = LogBridge()
         self.log_bridge.message.connect(self.append_log)
         self.manager = XrayProcessManager(self.log_bridge.message.emit)
         self.worker: UpdateWorker | None = None
         self.test_worker: NodeTestWorker | None = None
-        self.poll_worker: NodePollWorker | None = None
         self.node_results: dict[str, tuple[str, bool]] = {}
         self.exiting = False
         self.setWindowTitle("Xray UI")
@@ -303,7 +296,6 @@ class MainWindow(QMainWindow):
                     ("import", "从链接导入", self.import_node),
                     ("copy", "复制分享链接", self.copy_node_link),
                     ("test", "测试节点", self.test_selected_node),
-                    ("poll", "轮询节点", self.poll_nodes),
                     ("edit", "编辑", self.edit_node),
                 ),
             ),
@@ -362,8 +354,11 @@ class MainWindow(QMainWindow):
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setStretchLastSection(True)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(table.columnCount() - 1, QHeaderView.ResizeMode.Stretch)
+        header.setStretchLastSection(False)
         if table is self.node_table:
             self.node_buttons = buttons
         else:
@@ -375,7 +370,9 @@ class MainWindow(QMainWindow):
         form = QFormLayout(page)
         self.xray_dir = QLineEdit(self.config.settings.xray_dir)
         self.ghproxy = QLineEdit(self.config.settings.ghproxy)
-        self.ghproxy.setPlaceholderText("例如 https://ghproxy.net，留空为直连")
+        self.ghproxy.setPlaceholderText("例如 https://gh-proxy.com")
+        self.use_ghproxy = QCheckBox()
+        self.use_ghproxy.setChecked(self.config.settings.use_ghproxy)
         self.auto_update = QCheckBox()
         self.auto_update.setChecked(self.config.settings.auto_update)
         self.auto_start_xray = QCheckBox()
@@ -391,6 +388,7 @@ class MainWindow(QMainWindow):
         save.clicked.connect(self.save_settings)
         form.addRow("Xray 目录", self.xray_dir)
         form.addRow("ghproxy", self.ghproxy)
+        form.addRow("使用 ghproxy 下载", self.use_ghproxy)
         form.addRow("启动时检查更新", self.auto_update)
         form.addRow("启动应用后运行 Xray", self.auto_start_xray)
         form.addRow("开机启动", self.start_with_windows)
@@ -399,7 +397,12 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_tray(self) -> None:
-        icon = self.style().standardIcon(QStyle.SP_ComputerIcon)
+        icon_path = resource_path("resources/xray-ui.ico")
+        icon = (
+            QIcon(str(icon_path))
+            if icon_path.exists()
+            else self.style().standardIcon(QStyle.SP_ComputerIcon)
+        )
         self.setWindowIcon(icon)
         self.tray = QSystemTrayIcon(icon, self)
         self.tray.setToolTip("Xray UI")
@@ -467,7 +470,7 @@ class MainWindow(QMainWindow):
                 protocol_names.get(item.protocol, item.protocol),
                 item.listen,
                 str(item.port),
-                names.get(item.node_id, "无效"),
+                "轮询全部节点" if item.round_robin else names.get(item.node_id, "无效"),
                 route_label,
             )
             for column, value in enumerate(values):
@@ -478,13 +481,10 @@ class MainWindow(QMainWindow):
         node_selected = 0 <= self.node_table.currentRow() < len(self.config.nodes)
         inbound_selected = 0 <= self.inbound_table.currentRow() < len(self.config.inbounds)
         testing = bool(self.test_worker and self.test_worker.isRunning())
-        polling = bool(self.poll_worker and self.poll_worker.isRunning())
-        busy = testing or polling
+        busy = testing
         for key in ("copy", "edit", "remove"):
             self.node_buttons[key].setEnabled(node_selected and not busy)
         self.node_buttons["test"].setEnabled(node_selected and not busy)
-        self.node_buttons["poll"].setEnabled(bool(self.config.nodes) and not testing)
-        self.node_buttons["poll"].setText("停止轮询" if polling else "轮询节点")
         self.node_buttons["add"].setEnabled(not busy)
         self.node_buttons["import"].setEnabled(not busy)
         self.inbound_buttons["add"].setEnabled(bool(self.config.nodes))
@@ -575,43 +575,11 @@ class MainWindow(QMainWindow):
         self.refresh()
         self.error(f"节点 {name} 测试失败：{reason}")
 
-    def poll_nodes(self) -> None:
-        if self.poll_worker and self.poll_worker.isRunning():
-            self.poll_worker.requestInterruption()
-            self.audit("请求停止节点轮询")
-            self.update_action_states()
-            return
-        if not self.config.nodes:
-            return
-        for node in self.config.nodes:
-            self.node_results[node.id] = ("等待轮询…", True)
-        self.refresh()
-        self.audit(f"开始轮询 {len(self.config.nodes)} 个节点")
-        self.poll_worker = NodePollWorker(
-            list(self.config.nodes), Path(self.config.settings.xray_dir)
-        )
-        self.poll_worker.result.connect(self._poll_result)
-        self.poll_worker.finished.connect(self._poll_finished)
-        self.poll_worker.start()
-        self.update_action_states()
-
-    def _poll_result(self, node_id: str, text: str, success: bool) -> None:
-        self.node_results[node_id] = (text, success)
-        self.refresh()
-        node = next((item for item in self.config.nodes if item.id == node_id), None)
-        if node:
-            self.audit(f"轮询节点 {node.name}：{text}")
-
-    def _poll_finished(self) -> None:
-        interrupted = bool(self.poll_worker and self.poll_worker.isInterruptionRequested())
-        self.audit("节点轮询已停止" if interrupted else "节点轮询完成")
-        self.update_action_states()
-
     def remove_node(self) -> None:
         row = self.node_table.currentRow()
         if row >= 0:
             node_id = self.config.nodes[row].id
-            if any(item.node_id == node_id for item in self.config.inbounds):
+            if any(item.node_id == node_id or item.round_robin for item in self.config.inbounds):
                 self.error("该节点仍被入站使用")
                 return
             self.config.nodes.pop(row)
@@ -655,6 +623,7 @@ class MainWindow(QMainWindow):
     def save_settings(self) -> None:
         self.config.settings.xray_dir = self.xray_dir.text().strip()
         self.config.settings.ghproxy = self.ghproxy.text().strip()
+        self.config.settings.use_ghproxy = self.use_ghproxy.isChecked()
         self.config.settings.auto_update = self.auto_update.isChecked()
         self.config.settings.auto_start_xray = self.auto_start_xray.isChecked()
         self.config.settings.start_with_windows = self.start_with_windows.isChecked()
@@ -690,7 +659,8 @@ class MainWindow(QMainWindow):
             self.audit("忽略重复的 Xray 更新请求")
             return
         self.audit("检查并更新 Xray")
-        updater = XrayUpdater(Path(self.xray_dir.text().strip()), self.ghproxy.text().strip())
+        proxy = self.ghproxy.text().strip() if self.use_ghproxy.isChecked() else ""
+        updater = XrayUpdater(Path(self.xray_dir.text().strip()), proxy)
         self.worker = UpdateWorker(updater)
         self.worker.done.connect(self._update_done)
         self.worker.failed.connect(self.error)
@@ -739,8 +709,6 @@ class MainWindow(QMainWindow):
             self.audit("窗口最小化到系统托盘")
             self.tray.showMessage("Xray UI", "程序仍在托盘运行")
             return
-        if self.poll_worker and self.poll_worker.isRunning():
-            self.poll_worker.requestInterruption()
         self.manager.stop()
         self.audit("应用退出")
         event.accept()

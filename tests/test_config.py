@@ -83,3 +83,21 @@ def test_single_protocol_inbounds_listen_on_public_port_without_mixed_frontend()
     assert result["inbounds"][0]["protocol"] == "socks"
     assert result["inbounds"][0]["port"] == 10808
     assert result["routing"]["rules"][-1]["inboundTag"] == ["in-1-s"]
+
+
+def test_inbound_can_round_robin_all_outbound_nodes():
+    first = Node("一", "vless", "one.example.com", 443, "uuid-1", security="tls")
+    second = Node("二", "trojan", "two.example.com", 443, "password", security="tls")
+    inbound = MixedInbound("轮询入口", 10808, first.id, round_robin=True)
+    result = build_xray_config(
+        AppConfig(nodes=[first, second], inbounds=[inbound]),
+        {inbound.id: InternalPorts(31001, 31002)},
+    )
+    assert result["routing"]["balancers"] == [
+        {
+            "tag": "bal-1",
+            "selector": ["out-1", "out-2"],
+            "strategy": {"type": "roundRobin"},
+        }
+    ]
+    assert result["routing"]["rules"][-1]["balancerTag"] == "bal-1"

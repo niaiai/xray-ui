@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from .models import AppConfig
@@ -12,6 +13,12 @@ def default_data_dir() -> Path:
     if not base:
         base = str(Path.home() / "AppData" / "Local")
     return Path(base) / "xray-ui"
+
+
+def application_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path.cwd().resolve()
 
 
 class JsonConfigStore:
