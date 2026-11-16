@@ -102,6 +102,9 @@ def build_xray_config(
 
     inbounds: list[dict[str, Any]] = []
     rules: list[dict[str, Any]] = []
+    direct_domains = [normalize_domain(value) for value in config.direct_domains if value.strip()]
+    if direct_domains:
+        rules.append({"type": "field", "domain": direct_domains, "outboundTag": "direct"})
     outbound_tags = {node.id: f"out-{index}" for index, node in enumerate(config.nodes, 1)}
     for index, inbound in enumerate(config.inbounds, 1):
         ports = internal_ports[inbound.id]
@@ -151,10 +154,14 @@ def build_xray_config(
                     "outboundTag": "direct",
                 }
             )
-        elif inbound.route_mode == "custom" and inbound.custom_domains:
-            domains = [normalize_domain(value) for value in inbound.custom_domains if value.strip()]
+        elif inbound.route_mode == "bypass_private":
             rules.append(
-                {"type": "field", "inboundTag": tags, "domain": domains, "outboundTag": "direct"}
+                {
+                    "type": "field",
+                    "inboundTag": tags,
+                    "ip": ["geoip:private"],
+                    "outboundTag": "direct",
+                }
             )
         rules.append(
             {

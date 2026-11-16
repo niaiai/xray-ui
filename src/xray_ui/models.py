@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 from uuid import uuid4
 
-RouteMode = Literal["global", "bypass_cn", "custom"]
+RouteMode = Literal["global", "bypass_cn", "bypass_private"]
 Protocol = Literal["vless", "vmess", "trojan", "shadowsocks", "socks", "http"]
 
 
@@ -87,17 +87,26 @@ class AppConfig:
     settings: AppSettings = field(default_factory=AppSettings)
     nodes: list[Node] = field(default_factory=list)
     inbounds: list[MixedInbound] = field(default_factory=list)
+    direct_domains: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> AppConfig:
+        inbound_values = [dict(item) for item in value.get("inbounds", [])]
+        direct_domains = list(value.get("direct_domains", []))
+        # 兼容旧版按入站保存的 custom 直连域名，迁移为全局规则。
+        for item in inbound_values:
+            if item.get("route_mode") == "custom":
+                direct_domains.extend(item.get("custom_domains", []))
+                item["route_mode"] = "global"
         return cls(
             schema_version=int(value.get("schema_version", 1)),
             settings=AppSettings.from_dict(value.get("settings", {})),
             nodes=[Node.from_dict(item) for item in value.get("nodes", [])],
-            inbounds=[MixedInbound.from_dict(item) for item in value.get("inbounds", [])],
+            inbounds=[MixedInbound.from_dict(item) for item in inbound_values],
+            direct_domains=list(dict.fromkeys(direct_domains)),
         )
 
     def validate(self) -> list[str]:
@@ -128,4 +137,6 @@ class AppConfig:
                 errors.append(f"入站 {inbound.name} 的端口无效")
             if inbound.node_id not in node_ids:
                 errors.append(f"入站 {inbound.name} 未绑定有效节点")
+            if inbound.route_mode not in {"global", "bypass_cn", "bypass_private"}:
+                errors.append(f"入站 {inbound.name} 的路由模式无效")
         return errors

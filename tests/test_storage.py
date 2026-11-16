@@ -35,3 +35,27 @@ def test_old_transport_names_are_migrated(tmp_path):
         encoding="utf-8",
     )
     assert JsonConfigStore(path).load().nodes[0].transport == "websocket"
+
+
+def test_old_per_inbound_custom_domains_are_migrated_to_global(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "inbounds": [
+                    {
+                        "name": "旧入口",
+                        "port": 10808,
+                        "node_id": "missing",
+                        "route_mode": "custom",
+                        "custom_domains": ["example.com"],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = JsonConfigStore(path).load()
+    assert config.inbounds[0].route_mode == "global"
+    assert config.direct_domains == ["example.com"]

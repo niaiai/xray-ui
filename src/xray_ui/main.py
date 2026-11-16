@@ -10,6 +10,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -127,7 +128,11 @@ class NodeDialog(QDialog):
 
 
 class InboundDialog(QDialog):
-    MODES: ClassVar = {"全局": "global", "跳过 CN": "bypass_cn", "自定义域名直连": "custom"}
+    MODES: ClassVar = {
+        "全局": "global",
+        "跳过 CN": "bypass_cn",
+        "跳过私有地址": "bypass_private",
+    }
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -139,17 +144,18 @@ class InboundDialog(QDialog):
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
         self.port.setValue(10808)
-        self.node = QLineEdit(config.nodes[0].name if config.nodes else "")
-        self.mode = QLineEdit("全局")
-        self.domains = QTextEdit()
-        self.domains.setPlaceholderText("每行一个域名，例如 example.com 或 *.example.com")
+        self.node = QComboBox()
+        for node in config.nodes:
+            self.node.addItem(node.name, node.id)
+        self.mode = QComboBox()
+        for label, value in self.MODES.items():
+            self.mode.addItem(label, value)
         for label, widget in (
             ("名称", self.name),
             ("监听地址", self.listen),
             ("端口", self.port),
             ("出口节点名称", self.node),
             ("路由模式", self.mode),
-            ("直连域名", self.domains),
         ):
             form.addRow(label, widget)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -158,24 +164,15 @@ class InboundDialog(QDialog):
         form.addRow(buttons)
 
     def value(self) -> MixedInbound:
-        selected = next(
-            (node for node in self.config.nodes if node.name == self.node.text().strip()), None
-        )
-        if not selected:
+        node_id = self.node.currentData()
+        if not node_id:
             raise ValueError("找不到指定的出口节点")
-        mode_text = self.mode.text().strip()
-        mode = self.MODES.get(mode_text, mode_text)
-        if mode not in self.MODES.values():
-            raise ValueError("路由模式只能是：全局、跳过 CN、自定义域名直连")
         return MixedInbound(
             name=self.name.text().strip(),
             listen=self.listen.text().strip(),
             port=self.port.value(),
-            node_id=selected.id,
-            route_mode=mode,
-            custom_domains=[
-                line.strip() for line in self.domains.toPlainText().splitlines() if line.strip()
-            ],
+            node_id=str(node_id),
+            route_mode=str(self.mode.currentData()),
         )
 
 
@@ -242,10 +239,18 @@ class MainWindow(QMainWindow):
             "Mixed 入站",
         )
         tabs.addTab(self._settings_page(), "设置")
+        layout.addWidget(tabs, 3)
+
+        log_header = QHBoxLayout()
+        log_header.addWidget(QLabel("运行日志"))
+        log_header.addStretch()
+        clear_button = QPushButton("清空")
+        clear_button.clicked.connect(self.clear_logs)
+        log_header.addWidget(clear_button)
+        layout.addLayout(log_header)
         self.logs = QTextEdit()
         self.logs.setReadOnly(True)
-        tabs.addTab(self.logs, "日志")
-        layout.addWidget(tabs)
+        layout.addWidget(self.logs, 2)
         self.setCentralWidget(central)
 
     def _table_page(self, table, add, remove, extra_actions=()) -> QWidget:
@@ -278,6 +283,11 @@ class MainWindow(QMainWindow):
         self.auto_start_xray.setChecked(self.config.settings.auto_start_xray)
         self.start_with_windows = QCheckBox()
         self.start_with_windows.setChecked(self.config.settings.start_with_windows)
+        self.direct_domains = QTextEdit()
+        self.direct_domains.setPlainText("\n".join(self.config.direct_domains))
+        self.direct_domains.setPlaceholderText(
+            "每行一个全局直连域名，例如 example.com 或 *.example.com"
+        )
         save = QPushButton("保存设置")
         save.clicked.connect(self.save_settings)
         form.addRow("Xray 目录", self.xray_dir)
@@ -285,6 +295,7 @@ class MainWindow(QMainWindow):
         form.addRow("启动时检查更新", self.auto_update)
         form.addRow("启动应用后运行 Xray", self.auto_start_xray)
         form.addRow("开机启动", self.start_with_windows)
+        form.addRow("全局直连域名", self.direct_domains)
         form.addRow(save)
         return page
 
@@ -338,6 +349,11 @@ class MainWindow(QMainWindow):
             ):
                 self.node_table.setItem(row, column, QTableWidgetItem(value))
         names = {node.id: node.name for node in self.config.nodes}
+        route_names = {
+            "global": "全局",
+            "bypass_cn": "跳过 CN",
+            "bypass_private": "跳过私有地址",
+        }
         self.inbound_table.setRowCount(len(self.config.inbounds))
         for row, item in enumerate(self.config.inbounds):
             values = (
@@ -345,7 +361,7 @@ class MainWindow(QMainWindow):
                 item.listen,
                 str(item.port),
                 names.get(item.node_id, "无效"),
-                item.route_mode,
+                route_names.get(item.route_mode, item.route_mode),
             )
             for column, value in enumerate(values):
                 self.inbound_table.setItem(row, column, QTableWidgetItem(value))
@@ -447,6 +463,9 @@ class MainWindow(QMainWindow):
         self.config.settings.auto_update = self.auto_update.isChecked()
         self.config.settings.auto_start_xray = self.auto_start_xray.isChecked()
         self.config.settings.start_with_windows = self.start_with_windows.isChecked()
+        self.config.direct_domains = [
+            line.strip() for line in self.direct_domains.toPlainText().splitlines() if line.strip()
+        ]
         try:
             set_start_with_windows(self.config.settings.start_with_windows)
         except OSError as error:
@@ -488,8 +507,12 @@ class MainWindow(QMainWindow):
             self.error(str(error))
 
     def append_log(self, text: str) -> None:
-        self.logs.append(f"[{self._log_time()}] [XRAY] {text}")
+        self.logs.append(text)
         self.logger.info("[XRAY] %s", text)
+
+    def clear_logs(self) -> None:
+        self.logs.clear()
+        self.logger.info("[UI] 清空界面日志")
 
     def audit(self, text: str) -> None:
         line = f"[{self._log_time()}] [UI] {text}"
