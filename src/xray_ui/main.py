@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import ClassVar
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -64,8 +66,8 @@ class UpdateWorker(QThread):
 
 
 class NodeTestWorker(QThread):
-    done = Signal(str, int)
-    failed = Signal(str, str)
+    done = Signal(str, str, int)
+    failed = Signal(str, str, str)
 
     def __init__(self, node: Node, xray_dir: Path) -> None:
         super().__init__()
@@ -75,9 +77,28 @@ class NodeTestWorker(QThread):
     def run(self) -> None:
         try:
             result = test_node(self.node, self.xray_dir)
-            self.done.emit(self.node.name, result.elapsed_ms)
+            self.done.emit(self.node.id, self.node.name, result.elapsed_ms)
         except Exception as error:
-            self.failed.emit(self.node.name, str(error))
+            self.failed.emit(self.node.id, self.node.name, str(error))
+
+
+class NodePollWorker(QThread):
+    result = Signal(str, str, bool)
+
+    def __init__(self, nodes: list[Node], xray_dir: Path) -> None:
+        super().__init__()
+        self.nodes = nodes
+        self.xray_dir = xray_dir
+
+    def run(self) -> None:
+        for node in self.nodes:
+            if self.isInterruptionRequested():
+                break
+            try:
+                tested = test_node(node, self.xray_dir)
+                self.result.emit(node.id, f"{tested.elapsed_ms} ms", True)
+            except Exception as error:
+                self.result.emit(node.id, f"失败：{error}", False)
 
 
 class LogBridge(QObject):
@@ -232,9 +253,16 @@ class MainWindow(QMainWindow):
         self.manager = XrayProcessManager(self.log_bridge.message.emit)
         self.worker: UpdateWorker | None = None
         self.test_worker: NodeTestWorker | None = None
+        self.poll_worker: NodePollWorker | None = None
+        self.node_results: dict[str, tuple[str, bool]] = {}
         self.exiting = False
         self.setWindowTitle("Xray UI")
         self.resize(920, 620)
+        self.setStyleSheet(
+            "QTableWidget { selection-background-color: #2563eb; selection-color: white; }"
+            "QTableWidget::item:hover { background: #dbeafe; color: #111827; }"
+            "QPushButton:disabled { color: #9ca3af; background: #e5e7eb; }"
+        )
         self._build_ui()
         self._build_tray()
         self.refresh()
@@ -248,20 +276,20 @@ class MainWindow(QMainWindow):
         self.status = QLabel("已停止")
         self.start_button = QPushButton("启动")
         self.stop_button = QPushButton("停止")
-        update_button = QPushButton("下载/更新 Xray")
+        self.update_button = QPushButton("下载/更新 Xray")
         self.start_button.clicked.connect(self.start_xray)
         self.stop_button.clicked.connect(self.stop_xray)
-        update_button.clicked.connect(self.update_xray)
+        self.update_button.clicked.connect(self.update_xray)
         controls.addWidget(self.status)
         controls.addStretch()
-        controls.addWidget(update_button)
+        controls.addWidget(self.update_button)
         controls.addWidget(self.start_button)
         controls.addWidget(self.stop_button)
         layout.addLayout(controls)
 
         tabs = QTabWidget()
-        self.node_table = QTableWidget(0, 4)
-        self.node_table.setHorizontalHeaderLabels(["名称", "协议", "地址", "端口"])
+        self.node_table = QTableWidget(0, 5)
+        self.node_table.setHorizontalHeaderLabels(["名称", "协议", "地址", "端口", "测试结果"])
         self.inbound_table = QTableWidget(0, 6)
         self.inbound_table.setHorizontalHeaderLabels(
             ["名称", "协议", "监听", "端口", "出口", "路由"]
@@ -272,10 +300,11 @@ class MainWindow(QMainWindow):
                 self.add_node,
                 self.remove_node,
                 (
-                    ("从链接导入", self.import_node),
-                    ("复制分享链接", self.copy_node_link),
-                    ("测试节点", self.test_selected_node),
-                    ("编辑", self.edit_node),
+                    ("import", "从链接导入", self.import_node),
+                    ("copy", "复制分享链接", self.copy_node_link),
+                    ("test", "测试节点", self.test_selected_node),
+                    ("poll", "轮询节点", self.poll_nodes),
+                    ("edit", "编辑", self.edit_node),
                 ),
             ),
             "节点",
@@ -285,7 +314,7 @@ class MainWindow(QMainWindow):
                 self.inbound_table,
                 self.add_inbound,
                 self.remove_inbound,
-                (("编辑", self.edit_inbound),),
+                (("edit", "编辑", self.edit_inbound),),
             ),
             "入站",
         )
@@ -304,6 +333,11 @@ class MainWindow(QMainWindow):
         self.logs.document().setMaximumBlockCount(500)
         layout.addWidget(self.logs, 2)
         self.setCentralWidget(central)
+        self.node_table.itemSelectionChanged.connect(self.update_action_states)
+        self.inbound_table.itemSelectionChanged.connect(self.update_action_states)
+        self.node_table.itemDoubleClicked.connect(lambda _: self.edit_node())
+        self.inbound_table.itemDoubleClicked.connect(lambda _: self.edit_inbound())
+        self.update_action_states()
 
     def _table_page(self, table, add, remove, extra_actions=()) -> QWidget:
         page = QWidget()
@@ -314,13 +348,26 @@ class MainWindow(QMainWindow):
         add_button.clicked.connect(add)
         remove_button.clicked.connect(remove)
         row.addStretch()
-        for text, action in extra_actions:
+        buttons = {"add": add_button, "remove": remove_button}
+        for key, text, action in extra_actions:
             button = QPushButton(text)
             button.clicked.connect(action)
             row.addWidget(button)
+            buttons[key] = button
         row.addWidget(add_button)
         row.addWidget(remove_button)
         layout.addLayout(row)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setStretchLastSection(True)
+        if table is self.node_table:
+            self.node_buttons = buttons
+        else:
+            self.inbound_buttons = buttons
         return page
 
     def _settings_page(self) -> QWidget:
@@ -396,10 +443,14 @@ class MainWindow(QMainWindow):
     def refresh(self) -> None:
         self.node_table.setRowCount(len(self.config.nodes))
         for row, node in enumerate(self.config.nodes):
+            result_text, success = self.node_results.get(node.id, ("未测试", True))
             for column, value in enumerate(
-                (node.name, node.protocol, node.address, str(node.port))
+                (node.name, node.protocol, node.address, str(node.port), result_text)
             ):
-                self.node_table.setItem(row, column, QTableWidgetItem(value))
+                cell = QTableWidgetItem(value)
+                if column == 4 and result_text != "未测试":
+                    cell.setForeground(QColor("#15803d" if success else "#b91c1c"))
+                self.node_table.setItem(row, column, cell)
         names = {node.id: node.name for node in self.config.nodes}
         route_names = {
             "global": "全局",
@@ -421,6 +472,28 @@ class MainWindow(QMainWindow):
             )
             for column, value in enumerate(values):
                 self.inbound_table.setItem(row, column, QTableWidgetItem(value))
+        self.update_action_states()
+
+    def update_action_states(self) -> None:
+        node_selected = 0 <= self.node_table.currentRow() < len(self.config.nodes)
+        inbound_selected = 0 <= self.inbound_table.currentRow() < len(self.config.inbounds)
+        testing = bool(self.test_worker and self.test_worker.isRunning())
+        polling = bool(self.poll_worker and self.poll_worker.isRunning())
+        busy = testing or polling
+        for key in ("copy", "edit", "remove"):
+            self.node_buttons[key].setEnabled(node_selected and not busy)
+        self.node_buttons["test"].setEnabled(node_selected and not busy)
+        self.node_buttons["poll"].setEnabled(bool(self.config.nodes) and not testing)
+        self.node_buttons["poll"].setText("停止轮询" if polling else "轮询节点")
+        self.node_buttons["add"].setEnabled(not busy)
+        self.node_buttons["import"].setEnabled(not busy)
+        self.inbound_buttons["add"].setEnabled(bool(self.config.nodes))
+        self.inbound_buttons["edit"].setEnabled(inbound_selected)
+        self.inbound_buttons["remove"].setEnabled(inbound_selected)
+        self.start_button.setVisible(not self.manager.running)
+        self.stop_button.setVisible(self.manager.running)
+        self.stop_button.setEnabled(self.manager.running)
+        self.update_button.setEnabled(not bool(self.worker and self.worker.isRunning()))
 
     def add_node(self) -> None:
         dialog = NodeDialog(self)
@@ -480,26 +553,66 @@ class MainWindow(QMainWindow):
             self.error("已有节点正在测试")
             return
         node = self.config.nodes[row]
+        self.node_results[node.id] = ("测试中…", True)
+        self.refresh()
         self.audit(f"开始测试节点：{node.name}")
         self.test_worker = NodeTestWorker(node, Path(self.config.settings.xray_dir))
         self.test_worker.done.connect(self._node_test_done)
         self.test_worker.failed.connect(self._node_test_failed)
+        self.test_worker.finished.connect(self.update_action_states)
         self.test_worker.start()
+        self.update_action_states()
 
-    def _node_test_done(self, name: str, elapsed_ms: int) -> None:
+    def _node_test_done(self, node_id: str, name: str, elapsed_ms: int) -> None:
+        self.node_results[node_id] = (f"{elapsed_ms} ms", True)
+        self.refresh()
         message = f"节点 {name} 测试成功：{elapsed_ms} ms"
         self.audit(message)
         QMessageBox.information(self, "节点测试", message)
 
-    def _node_test_failed(self, name: str, reason: str) -> None:
+    def _node_test_failed(self, node_id: str, name: str, reason: str) -> None:
+        self.node_results[node_id] = ("失败", False)
+        self.refresh()
         self.error(f"节点 {name} 测试失败：{reason}")
+
+    def poll_nodes(self) -> None:
+        if self.poll_worker and self.poll_worker.isRunning():
+            self.poll_worker.requestInterruption()
+            self.audit("请求停止节点轮询")
+            self.update_action_states()
+            return
+        if not self.config.nodes:
+            return
+        for node in self.config.nodes:
+            self.node_results[node.id] = ("等待轮询…", True)
+        self.refresh()
+        self.audit(f"开始轮询 {len(self.config.nodes)} 个节点")
+        self.poll_worker = NodePollWorker(
+            list(self.config.nodes), Path(self.config.settings.xray_dir)
+        )
+        self.poll_worker.result.connect(self._poll_result)
+        self.poll_worker.finished.connect(self._poll_finished)
+        self.poll_worker.start()
+        self.update_action_states()
+
+    def _poll_result(self, node_id: str, text: str, success: bool) -> None:
+        self.node_results[node_id] = (text, success)
+        self.refresh()
+        node = next((item for item in self.config.nodes if item.id == node_id), None)
+        if node:
+            self.audit(f"轮询节点 {node.name}：{text}")
+
+    def _poll_finished(self) -> None:
+        interrupted = bool(self.poll_worker and self.poll_worker.isInterruptionRequested())
+        self.audit("节点轮询已停止" if interrupted else "节点轮询完成")
+        self.update_action_states()
 
     def remove_node(self) -> None:
         row = self.node_table.currentRow()
         if row >= 0:
             node_id = self.config.nodes[row].id
             if any(item.node_id == node_id for item in self.config.inbounds):
-                self.error("该节点仍被 Mixed 入站使用")
+                self.error("该节点仍被入站使用")
                 return
             self.config.nodes.pop(row)
             self._save_refresh()
@@ -514,7 +627,7 @@ class MainWindow(QMainWindow):
             try:
                 self.config.inbounds.append(dialog.value())
                 self._save_refresh()
-                self.audit(f"新增 Mixed 入站：{self.config.inbounds[-1].name}")
+                self.audit(f"新增入站：{self.config.inbounds[-1].name}")
             except ValueError as error:
                 self.error(str(error))
 
@@ -537,7 +650,7 @@ class MainWindow(QMainWindow):
         if row >= 0:
             self.config.inbounds.pop(row)
             self._save_refresh()
-            self.audit("删除 Mixed 入站")
+            self.audit("删除入站")
 
     def save_settings(self) -> None:
         self.config.settings.xray_dir = self.xray_dir.text().strip()
@@ -562,6 +675,7 @@ class MainWindow(QMainWindow):
             self.manager.start(self.config, Path(self.config.settings.xray_dir))
             self.status.setText("运行中")
             self.audit("启动 Xray")
+            self.update_action_states()
         except Exception as error:
             self.error(str(error))
 
@@ -569,6 +683,7 @@ class MainWindow(QMainWindow):
         self.manager.stop()
         self.status.setText("已停止")
         self.audit("停止 Xray")
+        self.update_action_states()
 
     def update_xray(self) -> None:
         if self.worker and self.worker.isRunning():
@@ -579,7 +694,9 @@ class MainWindow(QMainWindow):
         self.worker = UpdateWorker(updater)
         self.worker.done.connect(self._update_done)
         self.worker.failed.connect(self.error)
+        self.worker.finished.connect(self.update_action_states)
         self.worker.start()
+        self.update_action_states()
 
     def _save_refresh(self) -> None:
         try:
@@ -622,6 +739,8 @@ class MainWindow(QMainWindow):
             self.audit("窗口最小化到系统托盘")
             self.tray.showMessage("Xray UI", "程序仍在托盘运行")
             return
+        if self.poll_worker and self.poll_worker.isRunning():
+            self.poll_worker.requestInterruption()
         self.manager.stop()
         self.audit("应用退出")
         event.accept()
