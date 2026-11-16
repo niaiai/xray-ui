@@ -13,25 +13,42 @@ class InternalPorts:
 
 
 def _stream_settings(node: Node) -> dict[str, Any]:
-    stream: dict[str, Any] = {"network": node.transport, "security": node.security}
+    stream: dict[str, Any] = {"method": node.transport, "security": node.security}
     if node.security == "tls":
         stream["tlsSettings"] = {
             "serverName": node.server_name or node.address,
+            "allowInsecure": node.allow_insecure,
             "fingerprint": node.fingerprint,
         }
+        if node.alpn:
+            stream["tlsSettings"]["alpn"] = node.alpn
     elif node.security == "reality":
         stream["realitySettings"] = {
             "serverName": node.server_name,
             "fingerprint": node.fingerprint,
-            "publicKey": node.public_key,
+            "password": node.public_key,
             "shortId": node.short_id,
+            "spiderX": node.spider_x,
         }
+        if node.mldsa65_verify:
+            stream["realitySettings"]["mldsa65Verify"] = node.mldsa65_verify
     if node.transport == "websocket":
-        stream["wsSettings"] = {"path": node.path or "/", "headers": {"Host": node.host}}
+        stream["wsSettings"] = {"path": node.path or "/", "host": node.host}
     elif node.transport == "grpc":
-        stream["grpcSettings"] = {"serviceName": node.path.lstrip("/")}
+        stream["grpcSettings"] = {
+            "serviceName": node.path,
+            "authority": node.grpc_authority or node.host,
+            "multiMode": node.grpc_multi_mode,
+        }
     elif node.transport == "xhttp":
-        stream["xhttpSettings"] = {"path": node.path or "/", "host": node.host}
+        settings: dict[str, Any] = {"path": node.path or "/", "host": node.host}
+        if node.xhttp_mode:
+            settings["mode"] = node.xhttp_mode
+        if node.xhttp_extra:
+            settings["extra"] = node.xhttp_extra
+        stream["xhttpSettings"] = settings
+    elif node.transport == "raw" and node.header_type != "none":
+        stream["rawSettings"] = {"header": {"type": node.header_type}}
     return stream
 
 
@@ -42,11 +59,16 @@ def _outbound(node: Node, tag: str) -> dict[str, Any]:
             "address": node.address,
             "port": node.port,
             "id": node.credential,
-            "encryption": "none",
+            "encryption": node.encryption,
             "flow": node.flow,
         }
     elif node.protocol == "vmess":
-        settings = {"address": node.address, "port": node.port, "id": node.credential}
+        settings = {
+            "address": node.address,
+            "port": node.port,
+            "id": node.credential,
+            "security": node.vmess_security,
+        }
     elif node.protocol == "trojan":
         settings = {"address": node.address, "port": node.port, "password": node.credential}
     elif node.protocol == "shadowsocks":
@@ -57,16 +79,16 @@ def _outbound(node: Node, tag: str) -> dict[str, Any]:
             "method": node.method,
         }
     else:
-        settings = {"servers": [{"address": node.address, "port": node.port, "users": []}]}
+        settings = {"address": node.address, "port": node.port}
         if node.credential:
             username, _, password = node.credential.partition(":")
-            settings["servers"][0]["users"] = [{"user": username, "pass": password}]
+            settings.update({"user": username, "pass": password})
     outbound: dict[str, Any] = {
         "tag": tag,
         "protocol": node.protocol,
         "settings": settings,
     }
-    if node.protocol in {"vless", "vmess", "trojan", "shadowsocks"}:
+    if node.protocol in {"vless", "vmess", "trojan", "shadowsocks", "socks", "http"}:
         outbound["streamSettings"] = _stream_settings(node)
     return outbound
 

@@ -12,3 +12,26 @@ def test_json_round_trip(tmp_path):
     loaded = store.load()
     assert loaded.to_dict() == original.to_dict()
     assert json.loads(store.path.read_text(encoding="utf-8"))["schema_version"] == 1
+
+
+def test_old_transport_names_are_migrated(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "name": "旧节点",
+                        "protocol": "vless",
+                        "address": "example.com",
+                        "port": 443,
+                        "credential": "uuid",
+                        "transport": "ws",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    assert JsonConfigStore(path).load().nodes[0].transport == "websocket"

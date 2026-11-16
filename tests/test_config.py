@@ -31,6 +31,21 @@ def test_runtime_tags_are_short_and_stable():
     assert result["outbounds"][0]["tag"] == "out-1"
 
 
+def test_http_outbound_uses_current_flat_settings():
+    node = Node("HTTP", "http", "proxy.example.com", 3128, "user:pass")
+    inbound = MixedInbound("入口", 10808, node.id)
+    outbound = build_xray_config(
+        AppConfig(nodes=[node], inbounds=[inbound]),
+        {inbound.id: InternalPorts(31001, 31002)},
+    )["outbounds"][0]
+    assert outbound["settings"] == {
+        "address": "proxy.example.com",
+        "port": 3128,
+        "user": "user",
+        "pass": "pass",
+    }
+
+
 def test_custom_domains_are_normalized():
     config, _, inbound = sample_config("custom", ["example.com", "*.example.org", "full:a.test"])
     rules = build_xray_config(config, {inbound.id: InternalPorts(31001, 31002)})["routing"]["rules"]

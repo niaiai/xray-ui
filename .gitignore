@@ -11,4 +11,5 @@ dist/
 .vscode/
 Thumbs.db
 Desktop.ini
+.protocol-validation/
 

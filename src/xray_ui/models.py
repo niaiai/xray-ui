@@ -29,11 +29,28 @@ class Node:
     short_id: str = ""
     fingerprint: str = "chrome"
     method: str = "aes-128-gcm"
+    encryption: str = "none"
+    vmess_security: str = "auto"
+    allow_insecure: bool = False
+    alpn: list[str] = field(default_factory=list)
+    spider_x: str = ""
+    mldsa65_verify: str = ""
+    grpc_authority: str = ""
+    grpc_multi_mode: bool = False
+    xhttp_mode: str = ""
+    xhttp_extra: dict[str, Any] = field(default_factory=dict)
+    header_type: str = "none"
     id: str = field(default_factory=new_id)
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> Node:
-        return cls(**value)
+        migrated = dict(value)
+        migrated["transport"] = {
+            "tcp": "raw",
+            "ws": "websocket",
+            "h2": "xhttp",
+        }.get(str(migrated.get("transport", "raw")).lower(), migrated.get("transport", "raw"))
+        return cls(**migrated)
 
 
 @dataclass(slots=True)
@@ -92,6 +109,16 @@ class AppConfig:
                 errors.append("节点名称和地址不能为空")
             if not 1 <= node.port <= 65535:
                 errors.append(f"节点 {node.name} 的端口无效")
+            if node.protocol not in {"vless", "vmess", "trojan", "shadowsocks", "socks", "http"}:
+                errors.append(f"节点 {node.name} 的协议不受支持")
+            if node.transport not in {"raw", "websocket", "grpc", "xhttp"}:
+                errors.append(f"节点 {node.name} 的传输方式 {node.transport} 暂不支持")
+            if node.security == "reality" and node.transport not in {"raw", "grpc", "xhttp"}:
+                errors.append(f"节点 {node.name} 的 REALITY 不支持 {node.transport} 传输")
+            if node.protocol in {"vless", "vmess", "trojan", "shadowsocks"} and not node.credential:
+                errors.append(f"节点 {node.name} 缺少 UUID 或密码")
+            if node.protocol == "vless" and not node.encryption:
+                errors.append(f"节点 {node.name} 的 VLESS encryption 不能为空")
         for inbound in self.inbounds:
             endpoint = (inbound.listen, inbound.port)
             if endpoint in endpoints:

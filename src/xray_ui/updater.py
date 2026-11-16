@@ -74,6 +74,8 @@ class XrayUpdater:
             temp = Path(temp_name)
             archive = temp / release.asset_name
             self._download(apply_proxy(release.download_url, self.ghproxy), archive, progress)
+            if not zipfile.is_zipfile(archive):
+                raise RuntimeError("下载内容不是有效的 Xray ZIP，请检查 ghproxy 地址")
             extract_dir = temp / "extract"
             with zipfile.ZipFile(archive) as package:
                 self._safe_extract(package, extract_dir)

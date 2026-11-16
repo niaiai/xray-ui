@@ -12,6 +12,7 @@
 - 自动下载/更新官方 Xray-core，支持 ghproxy URL 前缀
 - 从 `vless://`、`vmess://`、`trojan://`、`ss://`、`socks://`、`http://` 分享链接导入节点
 - 将节点重新生成分享链接并复制到剪贴板
+- 保留 VLESS Encryption、VMess 加密、TLS/REALITY、ALPN、WebSocket、gRPC、XHTTP 等分享参数
 - 通过临时 Xray HTTP 入站实际测试节点连通性和响应耗时
 - 启动前执行 Xray 配置校验，捕获运行日志，停止时清理进程树
 - UI 操作和 Xray 输出写入 `%LOCALAPPDATA%\xray-ui\logs\xray-ui.log`，自动滚动保留 5 份
