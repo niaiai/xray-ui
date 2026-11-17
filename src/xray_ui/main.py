@@ -351,6 +351,7 @@ class MainWindow(QMainWindow):
         self.test_batch_success = 0
         self.test_batch_failed = 0
         self.node_results: dict[str, tuple[str, bool]] = {}
+        self.closing_all = False
         self.setWindowTitle("Xray UI")
         self.resize(920, 620)
         self.setStyleSheet(
@@ -530,17 +531,20 @@ class MainWindow(QMainWindow):
         show_action = QAction("显示", self)
         start_action = QAction("启动 Xray", self)
         stop_action = QAction("停止 Xray", self)
-        exit_action = QAction("退出 UI（保留 Xray）", self)
+        exit_ui_action = QAction("退出 UI（保留 Xray）", self)
+        exit_all_action = QAction("全部退出", self)
         show_action.triggered.connect(self._show_window)
         start_action.triggered.connect(self.start_xray)
         stop_action.triggered.connect(self.stop_xray)
-        exit_action.triggered.connect(self._exit_app)
+        exit_ui_action.triggered.connect(self._exit_app)
+        exit_all_action.triggered.connect(self._exit_all)
         menu.addAction(show_action)
         menu.addSeparator()
         menu.addAction(start_action)
         menu.addAction(stop_action)
         menu.addSeparator()
-        menu.addAction(exit_action)
+        menu.addAction(exit_ui_action)
+        menu.addAction(exit_all_action)
         self.tray.activated.connect(
             lambda reason: (
                 self._show_window()
@@ -903,7 +907,8 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "错误", text)
 
     def closeEvent(self, event) -> None:
-        self.audit("退出 UI，Xray 保持后台运行")
+        if not self.closing_all:
+            self.audit("退出 UI，Xray 保持后台运行")
         event.accept()
 
     def _show_window(self) -> None:
@@ -913,6 +918,13 @@ class MainWindow(QMainWindow):
         self.audit("从系统托盘显示窗口")
 
     def _exit_app(self) -> None:
+        self.close()
+
+    def _exit_all(self) -> None:
+        self.closing_all = True
+        self.manager.stop()
+        self.status.setText("已停止")
+        self.audit("全部退出：已停止 Xray 并关闭 UI")
         self.close()
 
 
