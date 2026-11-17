@@ -351,7 +351,6 @@ class MainWindow(QMainWindow):
         self.test_batch_success = 0
         self.test_batch_failed = 0
         self.node_results: dict[str, tuple[str, bool]] = {}
-        self.exiting = False
         self.setWindowTitle("Xray UI")
         self.resize(920, 620)
         self.setStyleSheet(
@@ -360,9 +359,14 @@ class MainWindow(QMainWindow):
             "QPushButton:disabled { color: #9ca3af; background: #e5e7eb; }"
         )
         self._build_ui()
+        attached = self.manager.attach(Path(self.config.settings.xray_dir))
+        if attached:
+            self.status.setText("运行中")
         self._build_tray()
         self.refresh()
         self.audit("应用启动")
+        if attached:
+            self.audit(f"已关联后台 Xray 进程，PID {self.manager.pid}")
         QTimer.singleShot(0, self._after_startup)
 
     def _build_ui(self) -> None:
@@ -373,14 +377,17 @@ class MainWindow(QMainWindow):
         self.start_button = QPushButton("启动")
         self.stop_button = QPushButton("停止")
         self.update_button = QPushButton("下载/更新 Xray")
+        self.exit_ui_button = QPushButton("退出 UI")
         self.start_button.clicked.connect(self.start_xray)
         self.stop_button.clicked.connect(self.stop_xray)
         self.update_button.clicked.connect(self.update_xray)
+        self.exit_ui_button.clicked.connect(self._exit_app)
         controls.addWidget(self.status)
         controls.addStretch()
         controls.addWidget(self.update_button)
         controls.addWidget(self.start_button)
         controls.addWidget(self.stop_button)
+        controls.addWidget(self.exit_ui_button)
         layout.addLayout(controls)
 
         tabs = QTabWidget()
@@ -523,7 +530,7 @@ class MainWindow(QMainWindow):
         show_action = QAction("显示", self)
         start_action = QAction("启动 Xray", self)
         stop_action = QAction("停止 Xray", self)
-        exit_action = QAction("退出", self)
+        exit_action = QAction("退出 UI（保留 Xray）", self)
         show_action.triggered.connect(self._show_window)
         start_action.triggered.connect(self.start_xray)
         stop_action.triggered.connect(self.stop_xray)
@@ -547,7 +554,7 @@ class MainWindow(QMainWindow):
         if self.config.settings.auto_update:
             self.audit("自动检查 Xray 更新")
             self.update_xray()
-        if self.config.settings.auto_start_xray:
+        if self.config.settings.auto_start_xray and not self.manager.running:
             self.audit("自动启动 Xray")
             self.start_xray()
 
@@ -896,14 +903,7 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "错误", text)
 
     def closeEvent(self, event) -> None:
-        if not self.exiting and self.tray.isVisible():
-            event.ignore()
-            self.hide()
-            self.audit("窗口最小化到系统托盘")
-            self.tray.showMessage("Xray UI", "程序仍在托盘运行")
-            return
-        self.manager.stop()
-        self.audit("应用退出")
+        self.audit("退出 UI，Xray 保持后台运行")
         event.accept()
 
     def _show_window(self) -> None:
@@ -913,7 +913,6 @@ class MainWindow(QMainWindow):
         self.audit("从系统托盘显示窗口")
 
     def _exit_app(self) -> None:
-        self.exiting = True
         self.close()
 
 
