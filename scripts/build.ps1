@@ -9,7 +9,13 @@ $Source = Join-Path $ProjectRoot "src"
 $BasePrefix = (& $Python -c "import sys; print(sys.base_prefix)").Trim()
 $RuntimeBin = Join-Path $BasePrefix "Library\bin"
 $BinaryArgs = @()
-foreach ($Name in @("libcrypto-3-x64.dll", "libssl-3-x64.dll", "liblzma.dll", "libbz2.dll")) {
+foreach ($Name in @(
+    "ffi-8.dll",
+    "libcrypto-3-x64.dll",
+    "libssl-3-x64.dll",
+    "liblzma.dll",
+    "libbz2.dll"
+)) {
     $Path = Join-Path $RuntimeBin $Name
     if (Test-Path -LiteralPath $Path -PathType Leaf) {
         $BinaryArgs += @("--add-binary", "$Path;.")
