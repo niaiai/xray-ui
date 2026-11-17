@@ -106,9 +106,7 @@ def build_xray_config(config: AppConfig) -> dict[str, Any]:
     inbounds: list[dict[str, Any]] = []
     rules: list[dict[str, Any]] = []
     balancers: list[dict[str, Any]] = []
-    direct_domains = [normalize_domain(value) for value in config.direct_domains if value.strip()]
-    if direct_domains:
-        rules.append({"type": "field", "domain": direct_domains, "outboundTag": "direct"})
+    proxy_domains = [normalize_domain(value) for value in config.proxy_domains if value.strip()]
     used_outbound_tags = {"direct"}
     outbound_tags = {
         node.id: _unique_tag(node.name, used_outbound_tags) for node in config.nodes
@@ -151,6 +149,28 @@ def build_xray_config(config: AppConfig) -> dict[str, Any]:
                 },
             }
         )
+        if inbound.round_robin:
+            balancer_tag = _unique_tag(f"{inbound.name} 轮询", used_balancer_tags)
+            selected_ids = inbound.round_robin_node_ids or list(outbound_tags)
+            balancers.append(
+                {
+                    "tag": balancer_tag,
+                    "selector": [outbound_tags[node_id] for node_id in selected_ids],
+                    "strategy": {"type": "roundRobin"},
+                }
+            )
+            proxy_target = {"balancerTag": balancer_tag}
+        else:
+            proxy_target = {"outboundTag": outbound_tags[inbound.node_id]}
+        if proxy_domains:
+            rules.append(
+                {
+                    "type": "field",
+                    "inboundTag": tags,
+                    "domain": proxy_domains,
+                    **proxy_target,
+                }
+            )
         if inbound.skip_private:
             rules.append(
                 {
@@ -177,25 +197,7 @@ def build_xray_config(config: AppConfig) -> dict[str, Any]:
                     "outboundTag": "direct",
                 }
             )
-        if inbound.round_robin:
-            balancer_tag = _unique_tag(f"{inbound.name} 轮询", used_balancer_tags)
-            selected_ids = inbound.round_robin_node_ids or list(outbound_tags)
-            balancers.append(
-                {
-                    "tag": balancer_tag,
-                    "selector": [outbound_tags[node_id] for node_id in selected_ids],
-                    "strategy": {"type": "roundRobin"},
-                }
-            )
-            rules.append({"type": "field", "inboundTag": tags, "balancerTag": balancer_tag})
-        else:
-            rules.append(
-                {
-                    "type": "field",
-                    "inboundTag": tags,
-                    "outboundTag": outbound_tags[inbound.node_id],
-                }
-            )
+        rules.append({"type": "field", "inboundTag": tags, **proxy_target})
 
     runtime = {
         "log": {"loglevel": "warning"},

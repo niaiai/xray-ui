@@ -101,7 +101,7 @@ class AppConfig:
     settings: AppSettings = field(default_factory=AppSettings)
     nodes: list[Node] = field(default_factory=list)
     inbounds: list[Inbound] = field(default_factory=list)
-    direct_domains: list[str] = field(default_factory=list)
+    proxy_domains: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -109,11 +109,11 @@ class AppConfig:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> AppConfig:
         inbound_values = [dict(item) for item in value.get("inbounds", [])]
-        direct_domains = list(value.get("direct_domains", []))
-        # 兼容旧版按入站保存的 custom 直连域名，迁移为全局规则。
+        proxy_domains = list(value.get("proxy_domains", value.get("direct_domains", [])))
+        # 兼容旧字段名，将原配置按其实际语义迁移为全局代理域名。
         for item in inbound_values:
             if item.get("route_mode") == "custom":
-                direct_domains.extend(item.get("custom_domains", []))
+                proxy_domains.extend(item.get("custom_domains", []))
                 item["route_mode"] = "global"
             elif item.get("route_mode") == "bypass_private":
                 item["route_mode"] = "global"
@@ -123,7 +123,7 @@ class AppConfig:
             settings=AppSettings.from_dict(value.get("settings", {})),
             nodes=[Node.from_dict(item) for item in value.get("nodes", [])],
             inbounds=[Inbound.from_dict(item) for item in inbound_values],
-            direct_domains=list(dict.fromkeys(direct_domains)),
+            proxy_domains=list(dict.fromkeys(proxy_domains)),
         )
 
     def validate(self) -> list[str]:

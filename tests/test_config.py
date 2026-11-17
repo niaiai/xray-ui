@@ -111,13 +111,27 @@ def test_inbound_authentication_requires_both_username_and_password():
     assert config.validate() == ["入站 入口 A 的鉴权用户名和密码必须同时填写"]
 
 
-def test_custom_domains_are_normalized():
-    config, _, _inbound = sample_config()
-    config.direct_domains = ["example.com", "*.example.org", "full:a.test"]
+def test_proxy_domains_are_normalized_and_override_bypass_rules():
+    config, _, _inbound = sample_config("bypass_cn")
+    config.proxy_domains = ["example.com", "*.example.org", "full:a.test"]
     rules = build_xray_config(config)["routing"]["rules"]
     assert rules[0]["domain"] == ["domain:example.com", "domain:example.org", "full:a.test"]
-    assert "inboundTag" not in rules[0]
+    assert rules[0]["inboundTag"] == ["入口 A"]
+    assert rules[0]["outboundTag"] == "节点 A"
+    assert rules[1]["ip"] == ["geoip:private"]
     assert normalize_domain("geosite:google") == "geosite:google"
+
+
+def test_proxy_domains_use_inbound_round_robin_balancer():
+    first = Node("一", "vless", "one.example.com", 443, "uuid-1")
+    second = Node("二", "vless", "two.example.com", 443, "uuid-2")
+    inbound = Inbound("轮询入口", 10808, first.id, round_robin=True)
+    config = AppConfig(
+        nodes=[first, second], inbounds=[inbound], proxy_domains=["google.com"]
+    )
+    rule = build_xray_config(config)["routing"]["rules"][0]
+    assert rule["domain"] == ["domain:google.com"]
+    assert rule["balancerTag"] == "轮询入口 轮询"
 
 
 def test_inbounds_listen_on_configured_public_port():

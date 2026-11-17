@@ -494,10 +494,10 @@ class MainWindow(QMainWindow):
         self.auto_start_xray.setChecked(self.config.settings.auto_start_xray)
         self.start_with_windows = QCheckBox()
         self.start_with_windows.setChecked(self.config.settings.start_with_windows)
-        self.direct_domains = QTextEdit()
-        self.direct_domains.setPlainText("\n".join(self.config.direct_domains))
-        self.direct_domains.setPlaceholderText(
-            "每行一个全局直连域名，例如 example.com 或 *.example.com"
+        self.proxy_domains = QTextEdit()
+        self.proxy_domains.setPlainText("\n".join(self.config.proxy_domains))
+        self.proxy_domains.setPlaceholderText(
+            "每行一个强制走代理的域名，例如 example.com 或 *.example.com"
         )
         save = QPushButton("保存设置")
         save.clicked.connect(self.save_settings)
@@ -508,7 +508,7 @@ class MainWindow(QMainWindow):
         form.addRow("启动时检查更新", self.auto_update)
         form.addRow("启动应用后运行 Xray", self.auto_start_xray)
         form.addRow("开机启动", self.start_with_windows)
-        form.addRow("全局直连域名", self.direct_domains)
+        form.addRow("全局代理域名", self.proxy_domains)
         form.addRow(save)
         return page
 
@@ -829,8 +829,8 @@ class MainWindow(QMainWindow):
         self.config.settings.auto_update = self.auto_update.isChecked()
         self.config.settings.auto_start_xray = self.auto_start_xray.isChecked()
         self.config.settings.start_with_windows = self.start_with_windows.isChecked()
-        self.config.direct_domains = [
-            line.strip() for line in self.direct_domains.toPlainText().splitlines() if line.strip()
+        self.config.proxy_domains = [
+            line.strip() for line in self.proxy_domains.toPlainText().splitlines() if line.strip()
         ]
         try:
             set_start_with_windows(self.config.settings.start_with_windows)

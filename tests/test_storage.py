@@ -37,7 +37,7 @@ def test_old_transport_names_are_migrated(tmp_path):
     assert JsonConfigStore(path).load().nodes[0].transport == "websocket"
 
 
-def test_old_per_inbound_custom_domains_are_migrated_to_global(tmp_path):
+def test_old_domain_fields_are_migrated_to_global_proxy_domains(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(
         json.dumps(
@@ -58,7 +58,13 @@ def test_old_per_inbound_custom_domains_are_migrated_to_global(tmp_path):
     )
     config = JsonConfigStore(path).load()
     assert config.inbounds[0].route_mode == "global"
-    assert config.direct_domains == ["example.com"]
+    assert config.proxy_domains == ["example.com"]
+
+
+def test_old_direct_domains_name_is_migrated_to_proxy_domains():
+    config = AppConfig.from_dict({"direct_domains": ["google.com"]})
+    assert config.proxy_domains == ["google.com"]
+    assert "direct_domains" not in config.to_dict()
 
 
 def test_ghproxy_is_enabled_by_default_and_empty_old_value_is_migrated():
