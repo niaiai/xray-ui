@@ -1,15 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from .models import AppConfig, Node
 
 
-@dataclass(frozen=True, slots=True)
-class InternalPorts:
-    socks: int
-    http: int
+def _unique_tag(name: str, used: set[str]) -> str:
+    """保留配置名称作为标签，并为重名项追加可读序号。"""
+    base = name.strip()
+    tag = base
+    number = 2
+    while tag in used:
+        tag = f"{base} ({number})"
+        number += 1
+    used.add(tag)
+    return tag
 
 
 def _stream_settings(node: Node) -> dict[str, Any]:
@@ -93,9 +98,7 @@ def _outbound(node: Node, tag: str) -> dict[str, Any]:
     return outbound
 
 
-def build_xray_config(
-    config: AppConfig, internal_ports: dict[str, InternalPorts]
-) -> dict[str, Any]:
+def build_xray_config(config: AppConfig) -> dict[str, Any]:
     errors = config.validate()
     if errors:
         raise ValueError("；".join(errors))
@@ -106,44 +109,48 @@ def build_xray_config(
     direct_domains = [normalize_domain(value) for value in config.direct_domains if value.strip()]
     if direct_domains:
         rules.append({"type": "field", "domain": direct_domains, "outboundTag": "direct"})
-    outbound_tags = {node.id: f"out-{index}" for index, node in enumerate(config.nodes, 1)}
-    for index, inbound in enumerate(config.inbounds, 1):
-        ports = internal_ports[inbound.id]
-        tags: list[str] = []
-        if inbound.protocol in {"socks", "mixed"}:
-            tag = f"in-{index}-s"
-            tags.append(tag)
-            inbounds.append(
-                {
-                    "tag": tag,
-                    "listen": "127.0.0.1" if inbound.protocol == "mixed" else inbound.listen,
-                    "port": ports.socks if inbound.protocol == "mixed" else inbound.port,
-                    "protocol": "socks",
-                    "settings": {"udp": True},
-                    "sniffing": {
-                        "enabled": True,
-                        "destOverride": ["http", "tls", "quic"],
-                        "routeOnly": True,
-                    },
-                }
-            )
-        if inbound.protocol in {"http", "mixed"}:
-            tag = f"in-{index}-h"
-            tags.append(tag)
-            inbounds.append(
-                {
-                    "tag": tag,
-                    "listen": "127.0.0.1" if inbound.protocol == "mixed" else inbound.listen,
-                    "port": ports.http if inbound.protocol == "mixed" else inbound.port,
-                    "protocol": "http",
-                    "settings": {},
-                    "sniffing": {
-                        "enabled": True,
-                        "destOverride": ["http", "tls"],
-                        "routeOnly": True,
-                    },
-                }
-            )
+    used_outbound_tags = {"direct"}
+    outbound_tags = {
+        node.id: _unique_tag(node.name, used_outbound_tags) for node in config.nodes
+    }
+    used_inbound_tags: set[str] = set()
+    used_balancer_tags: set[str] = set()
+    for inbound in config.inbounds:
+        tag = _unique_tag(inbound.name, used_inbound_tags)
+        tags = [tag]
+        users = (
+            [{"user": inbound.auth_username, "pass": inbound.auth_password}]
+            if inbound.auth_username
+            else []
+        )
+        settings = (
+            {
+                "auth": "password" if users else "noauth",
+                "users": users,
+                "udp": True,
+            }
+            if inbound.protocol == "socks"
+            else {"users": users}
+        )
+        inbounds.append(
+            {
+                "tag": tag,
+                "listen": inbound.listen,
+                "port": inbound.port,
+                "protocol": inbound.protocol,
+                "settings": settings,
+                "sniffing": {
+                    "enabled": True,
+                    "destOverride": (
+                        ["http", "tls", "quic"]
+                        if inbound.protocol == "socks"
+                        else ["http", "tls"]
+                    ),
+                    # 允许用 TLS SNI / HTTP Host 覆盖客户端传入的污染 IP。
+                    "routeOnly": False,
+                },
+            }
+        )
         if inbound.skip_private:
             rules.append(
                 {
@@ -171,7 +178,7 @@ def build_xray_config(
                 }
             )
         if inbound.round_robin:
-            balancer_tag = f"bal-{index}"
+            balancer_tag = _unique_tag(f"{inbound.name} 轮询", used_balancer_tags)
             selected_ids = inbound.round_robin_node_ids or list(outbound_tags)
             balancers.append(
                 {
@@ -190,7 +197,7 @@ def build_xray_config(
                 }
             )
 
-    return {
+    runtime = {
         "log": {"loglevel": "warning"},
         "inbounds": inbounds,
         "outbounds": [_outbound(node, outbound_tags[node.id]) for node in config.nodes]
@@ -201,6 +208,15 @@ def build_xray_config(
             "balancers": balancers,
         },
     }
+    dns_server = config.settings.dns_server.strip()
+    if dns_server:
+        runtime["dns"] = {
+            "servers": [dns_server],
+            "queryStrategy": "UseIPv4",
+            "disableFallback": True,
+            "useSystemHosts": False,
+        }
+    return runtime
 
 
 def normalize_domain(value: str) -> str:

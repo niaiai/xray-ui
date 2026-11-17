@@ -1,37 +1,19 @@
 from __future__ import annotations
 
 import json
-import socket
 import subprocess
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from .mixed_proxy import MixedProxyGroup, MixedTarget
 from .models import AppConfig
 from .storage import application_dir
-from .xray_config import InternalPorts, build_xray_config
-
-
-def reserve_internal_ports(count: int) -> list[InternalPorts]:
-    sockets: list[socket.socket] = []
-    ports: list[int] = []
-    try:
-        for _ in range(count * 2):
-            sock = socket.socket()
-            sock.bind(("127.0.0.1", 0))
-            sockets.append(sock)
-            ports.append(sock.getsockname()[1])
-    finally:
-        for sock in sockets:
-            sock.close()
-    return [InternalPorts(ports[index * 2], ports[index * 2 + 1]) for index in range(count)]
+from .xray_config import build_xray_config
 
 
 class XrayProcessManager:
     def __init__(self, on_log: Callable[[str], None] | None = None) -> None:
         self.process: subprocess.Popen[str] | None = None
-        self.mixed = MixedProxyGroup()
         self.on_log = on_log or (lambda _: None)
 
     @property
@@ -41,10 +23,7 @@ class XrayProcessManager:
     def start(self, config: AppConfig, xray_dir: Path) -> None:
         if self.running:
             raise RuntimeError("Xray 已在运行")
-        assignments = dict(
-            zip((item.id for item in config.inbounds), reserve_internal_ports(len(config.inbounds)))
-        )
-        runtime = build_xray_config(config, assignments)
+        runtime = build_xray_config(config)
         config_path = application_dir() / "xray-runtime.json"
         config_path.write_text(json.dumps(runtime, ensure_ascii=False, indent=2), encoding="utf-8")
         executable = xray_dir / "xray.exe"
@@ -70,22 +49,9 @@ class XrayProcessManager:
             stderr=subprocess.STDOUT,
             creationflags=creationflags,
         )
-        targets = [
-            MixedTarget(
-                item.listen, item.port, assignments[item.id].socks, assignments[item.id].http
-            )
-            for item in config.inbounds
-            if item.protocol == "mixed"
-        ]
-        try:
-            self.mixed.start(targets)
-        except Exception:
-            self.stop()
-            raise
         threading.Thread(target=self._read_logs, daemon=True).start()
 
     def stop(self) -> None:
-        self.mixed.stop()
         process = self.process
         self.process = None
         if not process or process.poll() is not None:

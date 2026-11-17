@@ -4,10 +4,12 @@
 
 ## 当前功能
 
-- 支持 HTTP、SOCKS5、单端口 Mixed（HTTP + SOCKS5）三种入站
+- 支持 HTTP、SOCKS5 两种入站
+- HTTP 与 SOCKS5 入站支持可选的用户名、密码鉴权
 - 每个入站可绑定单个出口节点或轮询全部节点
 - 每个入站可选全局或跳过 CN，另有默认开启的“跳过私有地址”开关
 - 全局直连域名规则独立配置，对所有入站生效
+- 通过流量嗅探恢复目标域名，并使用可配置的可信 DoH 防止本地 DNS 污染
 - VLESS、VMess、Trojan、Shadowsocks、SOCKS、HTTP 出口基础配置
 - 应用配置保存为程序同目录的 `config.json`
 - Xray 运行配置保存为程序同目录的 `xray-runtime.json`
@@ -40,6 +42,4 @@ py -m venv .venv
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\xray-ui.exe
 ```
-
-Mixed 由应用内的 TCP 协议分流器实现，Xray-core 内部使用两个仅监听 `127.0.0.1` 的随机端口。
 

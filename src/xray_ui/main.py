@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from .app_logging import configure_logging
-from .models import AppConfig, MixedInbound, Node
+from .models import AppConfig, Inbound, Node
 from .node_tester import test_node
 from .process import XrayProcessManager
 from .share_links import build_share_link, parse_share_link
@@ -55,6 +55,8 @@ def resource_path(relative: str) -> Path:
 class UpdateWorker(QThread):
     done = Signal(str)
     failed = Signal(str)
+    status = Signal(str)
+    progress = Signal(int)
 
     def __init__(self, updater: XrayUpdater) -> None:
         super().__init__()
@@ -62,12 +64,34 @@ class UpdateWorker(QThread):
 
     def run(self) -> None:
         try:
+            first_install = not (self.updater.xray_dir / "xray.exe").exists()
+            if first_install:
+                self.status.emit("未检测到 Xray-core，准备首次下载")
+            self.status.emit("正在获取 Xray-core 最新版本信息")
             release = self.updater.latest()
-            if self.updater.installed_version() == release.version:
+            installed = self.updater.installed_version()
+            self.status.emit(f"最新版本：{release.version}")
+            if not first_install and installed == release.version:
                 self.done.emit(f"当前已是最新版本 {release.version}")
                 return
-            self.updater.install(release)
-            self.done.emit(f"Xray-core 已更新到 {release.version}")
+            action = "下载" if first_install else "更新"
+            self.status.emit(f"开始{action} {release.asset_name}")
+            last_reported = -10
+
+            def report_progress(value: int) -> None:
+                nonlocal last_reported
+                bucket = value // 10 * 10
+                if bucket > last_reported:
+                    last_reported = bucket
+                    self.progress.emit(value)
+
+            self.updater.install(release, report_progress)
+            self.status.emit("下载包校验、解压及文件安装完成")
+            self.done.emit(
+                f"Xray-core 已安装 {release.version}"
+                if first_install
+                else f"Xray-core 已更新到 {release.version}"
+            )
         except Exception as error:
             self.failed.emit(str(error))
 
@@ -154,13 +178,13 @@ class InboundDialog(QDialog):
         "跳过 CN": "bypass_cn",
     }
 
-    PROTOCOLS: ClassVar = {"Mixed（HTTP + SOCKS5）": "mixed", "HTTP": "http", "SOCKS5": "socks"}
+    PROTOCOLS: ClassVar = {"HTTP": "http", "SOCKS5": "socks"}
 
     def __init__(
         self,
         config: AppConfig,
         parent: QWidget | None = None,
-        inbound: MixedInbound | None = None,
+        inbound: Inbound | None = None,
     ) -> None:
         super().__init__(parent)
         self.config = config
@@ -176,6 +200,11 @@ class InboundDialog(QDialog):
         self.protocol = QComboBox()
         for label, value in self.PROTOCOLS.items():
             self.protocol.addItem(label, value)
+        self.auth_username = QLineEdit()
+        self.auth_username.setPlaceholderText("留空表示不启用鉴权")
+        self.auth_password = QLineEdit()
+        self.auth_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.auth_password.setPlaceholderText("留空表示不启用鉴权")
         self.node = QComboBox()
         for node in config.nodes:
             self.node.addItem(node.name, node.id)
@@ -201,6 +230,8 @@ class InboundDialog(QDialog):
             ("入站协议", self.protocol),
             ("监听地址", self.listen),
             ("端口", self.port),
+            ("鉴权用户名", self.auth_username),
+            ("鉴权密码", self.auth_password),
             ("出口方式", self.outbound_mode),
             ("单节点", self.node),
             ("轮询节点", self.round_robin_all),
@@ -220,6 +251,8 @@ class InboundDialog(QDialog):
             self.name.setText(inbound.name)
             self.listen.setText(inbound.listen)
             self.port.setValue(inbound.port)
+            self.auth_username.setText(inbound.auth_username)
+            self.auth_password.setText(inbound.auth_password)
             self._select_data(self.protocol, inbound.protocol)
             self._select_data(self.node, inbound.node_id)
             self._select_data(
@@ -274,7 +307,7 @@ class InboundDialog(QDialog):
             if self.round_robin_nodes.item(index).checkState() == Qt.CheckState.Checked
         ]
 
-    def value(self) -> MixedInbound:
+    def value(self) -> Inbound:
         node_id = self.node.currentData()
         if not node_id:
             raise ValueError("找不到指定的出口节点")
@@ -290,11 +323,13 @@ class InboundDialog(QDialog):
             "node_id": selected_node_id,
             "route_mode": str(self.mode.currentData()),
             "protocol": str(self.protocol.currentData()),
+            "auth_username": self.auth_username.text().strip(),
+            "auth_password": self.auth_password.text(),
             "skip_private": self.skip_private.isChecked(),
             "round_robin": round_robin,
             "round_robin_node_ids": selected_ids,
         }
-        return replace(self.inbound, **values) if self.inbound else MixedInbound(**values)
+        return replace(self.inbound, **values) if self.inbound else Inbound(**values)
 
 
 class MainWindow(QMainWindow):
@@ -311,6 +346,10 @@ class MainWindow(QMainWindow):
         self.manager = XrayProcessManager(self.log_bridge.message.emit)
         self.worker: UpdateWorker | None = None
         self.test_worker: NodeTestWorker | None = None
+        self.test_queue: list[str] = []
+        self.testing_all_nodes = False
+        self.test_batch_success = 0
+        self.test_batch_failed = 0
         self.node_results: dict[str, tuple[str, bool]] = {}
         self.exiting = False
         self.setWindowTitle("Xray UI")
@@ -347,9 +386,9 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         self.node_table = QTableWidget(0, 5)
         self.node_table.setHorizontalHeaderLabels(["名称", "协议", "地址", "端口", "测试结果"])
-        self.inbound_table = QTableWidget(0, 6)
+        self.inbound_table = QTableWidget(0, 7)
         self.inbound_table.setHorizontalHeaderLabels(
-            ["名称", "协议", "监听", "端口", "出口", "路由"]
+            ["名称", "协议", "监听", "端口", "鉴权", "出口", "路由"]
         )
         tabs.addTab(
             self._table_page(
@@ -359,7 +398,7 @@ class MainWindow(QMainWindow):
                 (
                     ("import", "从链接导入", self.import_node),
                     ("copy", "复制分享链接", self.copy_node_link),
-                    ("test", "测试节点", self.test_selected_node),
+                    ("test", "全部测试", self.test_all_nodes),
                     ("edit", "编辑", self.edit_node),
                 ),
             ),
@@ -391,6 +430,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.node_table.itemSelectionChanged.connect(self.update_action_states)
         self.inbound_table.itemSelectionChanged.connect(self.update_action_states)
+        self.node_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.node_table.customContextMenuRequested.connect(self._show_node_context_menu)
         self.node_table.itemDoubleClicked.connect(lambda _: self.edit_node())
         self.inbound_table.itemDoubleClicked.connect(lambda _: self.edit_inbound())
         self.update_action_states()
@@ -435,6 +476,8 @@ class MainWindow(QMainWindow):
         self.xray_dir = QLineEdit(self.config.settings.xray_dir)
         self.ghproxy = QLineEdit(self.config.settings.ghproxy)
         self.ghproxy.setPlaceholderText("例如 https://gh-proxy.com")
+        self.dns_server = QLineEdit(self.config.settings.dns_server)
+        self.dns_server.setPlaceholderText("例如 https://1.1.1.1/dns-query")
         self.use_ghproxy = QCheckBox()
         self.use_ghproxy.setChecked(self.config.settings.use_ghproxy)
         self.auto_update = QCheckBox()
@@ -452,6 +495,7 @@ class MainWindow(QMainWindow):
         save.clicked.connect(self.save_settings)
         form.addRow("Xray 目录", self.xray_dir)
         form.addRow("ghproxy", self.ghproxy)
+        form.addRow("可信 DNS", self.dns_server)
         form.addRow("使用 ghproxy 下载", self.use_ghproxy)
         form.addRow("启动时检查更新", self.auto_update)
         form.addRow("启动应用后运行 Xray", self.auto_start_xray)
@@ -523,7 +567,7 @@ class MainWindow(QMainWindow):
             "global": "全局",
             "bypass_cn": "跳过 CN",
         }
-        protocol_names = {"mixed": "Mixed", "http": "HTTP", "socks": "SOCKS5"}
+        protocol_names = {"http": "HTTP", "socks": "SOCKS5"}
         self.inbound_table.setRowCount(len(self.config.inbounds))
         for row, item in enumerate(self.config.inbounds):
             route_label = route_names.get(item.route_mode, item.route_mode)
@@ -543,6 +587,7 @@ class MainWindow(QMainWindow):
                 protocol_names.get(item.protocol, item.protocol),
                 item.listen,
                 str(item.port),
+                "已启用" if item.auth_username else "无",
                 outbound_label,
                 route_label,
             )
@@ -557,7 +602,7 @@ class MainWindow(QMainWindow):
         busy = testing
         for key in ("copy", "edit", "remove"):
             self.node_buttons[key].setEnabled(node_selected and not busy)
-        self.node_buttons["test"].setEnabled(node_selected and not busy)
+        self.node_buttons["test"].setEnabled(bool(self.config.nodes) and not busy)
         self.node_buttons["add"].setEnabled(not busy)
         self.node_buttons["import"].setEnabled(not busy)
         self.inbound_buttons["add"].setEnabled(bool(self.config.nodes))
@@ -626,13 +671,50 @@ class MainWindow(QMainWindow):
             self.error("已有节点正在测试")
             return
         node = self.config.nodes[row]
+        self.testing_all_nodes = False
+        self.test_queue.clear()
+        self._start_node_test(node)
+
+    def test_all_nodes(self) -> None:
+        if not self.config.nodes:
+            self.error("暂无可测试的节点")
+            return
+        if self.test_worker and self.test_worker.isRunning():
+            self.error("已有节点正在测试")
+            return
+        self.testing_all_nodes = True
+        self.test_batch_success = 0
+        self.test_batch_failed = 0
+        self.test_queue = [node.id for node in self.config.nodes]
+        for node in self.config.nodes:
+            self.node_results[node.id] = ("等待测试", True)
+        self.audit(f"开始测试全部节点，共 {len(self.test_queue)} 个")
+        self._start_next_node_test()
+
+    def _start_next_node_test(self) -> None:
+        while self.test_queue:
+            node_id = self.test_queue.pop(0)
+            node = next((item for item in self.config.nodes if item.id == node_id), None)
+            if node:
+                self._start_node_test(node)
+                return
+        self.testing_all_nodes = False
+        self.refresh()
+        message = (
+            f"全部节点测试完成：成功 {self.test_batch_success} 个，"
+            f"失败 {self.test_batch_failed} 个"
+        )
+        self.audit(message)
+        QMessageBox.information(self, "节点测试", message)
+
+    def _start_node_test(self, node: Node) -> None:
         self.node_results[node.id] = ("测试中…", True)
         self.refresh()
         self.audit(f"开始测试节点：{node.name}")
         self.test_worker = NodeTestWorker(node, Path(self.config.settings.xray_dir))
         self.test_worker.done.connect(self._node_test_done)
         self.test_worker.failed.connect(self._node_test_failed)
-        self.test_worker.finished.connect(self.update_action_states)
+        self.test_worker.finished.connect(self._node_test_finished)
         self.test_worker.start()
         self.update_action_states()
 
@@ -641,12 +723,40 @@ class MainWindow(QMainWindow):
         self.refresh()
         message = f"节点 {name} 测试成功：{elapsed_ms} ms"
         self.audit(message)
-        QMessageBox.information(self, "节点测试", message)
+        if self.testing_all_nodes:
+            self.test_batch_success += 1
+        else:
+            QMessageBox.information(self, "节点测试", message)
 
     def _node_test_failed(self, node_id: str, name: str, reason: str) -> None:
         self.node_results[node_id] = ("失败", False)
         self.refresh()
-        self.error(f"节点 {name} 测试失败：{reason}")
+        message = f"节点 {name} 测试失败：{reason}"
+        if self.testing_all_nodes:
+            self.test_batch_failed += 1
+            self.audit(message)
+        else:
+            self.error(message)
+
+    def _node_test_finished(self) -> None:
+        self.test_worker = None
+        self.update_action_states()
+        if self.testing_all_nodes:
+            QTimer.singleShot(0, self._start_next_node_test)
+
+    def _show_node_context_menu(self, position) -> None:
+        index = self.node_table.indexAt(position)
+        if not index.isValid():
+            return
+        self.node_table.selectRow(index.row())
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        test_action = menu.addAction("测试此节点")
+        test_action.setEnabled(not bool(self.test_worker and self.test_worker.isRunning()))
+        selected = menu.exec(self.node_table.viewport().mapToGlobal(position))
+        if selected is test_action:
+            self.test_selected_node()
 
     def remove_node(self) -> None:
         row = self.node_table.currentRow()
@@ -703,6 +813,7 @@ class MainWindow(QMainWindow):
     def save_settings(self) -> None:
         self.config.settings.xray_dir = self.xray_dir.text().strip()
         self.config.settings.ghproxy = self.ghproxy.text().strip()
+        self.config.settings.dns_server = self.dns_server.text().strip()
         self.config.settings.use_ghproxy = self.use_ghproxy.isChecked()
         self.config.settings.auto_update = self.auto_update.isChecked()
         self.config.settings.auto_start_xray = self.auto_start_xray.isChecked()
@@ -742,6 +853,8 @@ class MainWindow(QMainWindow):
         proxy = self.ghproxy.text().strip() if self.use_ghproxy.isChecked() else ""
         updater = XrayUpdater(Path(self.xray_dir.text().strip()), proxy)
         self.worker = UpdateWorker(updater)
+        self.worker.status.connect(self.audit)
+        self.worker.progress.connect(lambda value: self.audit(f"Xray-core 下载进度：{value}%"))
         self.worker.done.connect(self._update_done)
         self.worker.failed.connect(self.error)
         self.worker.finished.connect(self.update_action_states)

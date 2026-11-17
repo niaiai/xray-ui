@@ -9,8 +9,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import AppConfig, MixedInbound, Node
-from .process import reserve_internal_ports
+from .models import AppConfig, Inbound, Node
 from .xray_config import build_xray_config
 
 DEFAULT_TEST_URL = "https://www.gstatic.com/generate_204"
@@ -32,13 +31,9 @@ def test_node(
     if not executable.exists():
         raise FileNotFoundError("尚未安装 Xray-core")
     public_port = _free_port()
-    inbound = MixedInbound("test", public_port, node.id)
+    inbound = Inbound("test", public_port, node.id, protocol="http")
     app_config = AppConfig(nodes=[node], inbounds=[inbound])
-    internal = reserve_internal_ports(1)[0]
-    runtime = build_xray_config(app_config, {inbound.id: internal})
-    # 节点测试无需 Mixed 前端，直接使用内部 HTTP 入站。
-    http_inbound = next(item for item in runtime["inbounds"] if item["protocol"] == "http")
-    http_port = int(http_inbound["port"])
+    runtime = build_xray_config(app_config)
     process: subprocess.Popen[str] | None = None
     with tempfile.TemporaryDirectory(prefix="xray-ui-test-") as temp_name:
         config_path = Path(temp_name) / "config.json"
@@ -52,9 +47,12 @@ def test_node(
             creationflags=flags,
         )
         try:
-            _wait_for_port(http_port, process, timeout=3)
+            _wait_for_port(public_port, process, timeout=3)
             proxy = urllib.request.ProxyHandler(
-                {"http": f"http://127.0.0.1:{http_port}", "https": f"http://127.0.0.1:{http_port}"}
+                {
+                    "http": f"http://127.0.0.1:{public_port}",
+                    "https": f"http://127.0.0.1:{public_port}",
+                }
             )
             opener = urllib.request.build_opener(proxy)
             started = time.perf_counter()

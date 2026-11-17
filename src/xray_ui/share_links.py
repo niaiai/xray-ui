@@ -182,7 +182,8 @@ def build_share_link(node: Node) -> str:
             auth += f":{quote(password, safe='')}"
         if auth:
             auth += "@"
-        return f"{node.protocol}://{auth}{_endpoint(node.address, node.port)}#{quote(node.name)}"
+        scheme = "https" if node.protocol == "http" and node.security == "tls" else node.protocol
+        return f"{scheme}://{auth}{_endpoint(node.address, node.port)}#{quote(node.name)}"
 
     query = {
         "encryption": node.encryption,

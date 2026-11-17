@@ -1,12 +1,12 @@
 import json
 
-from xray_ui.models import AppConfig, AppSettings, MixedInbound, Node
+from xray_ui.models import AppConfig, AppSettings, Inbound, Node
 from xray_ui.storage import JsonConfigStore
 
 
 def test_json_round_trip(tmp_path):
     node = Node("测试", "trojan", "server.example", 443, "password")
-    original = AppConfig(nodes=[node], inbounds=[MixedInbound("入口", 10808, node.id)])
+    original = AppConfig(nodes=[node], inbounds=[Inbound("入口", 10808, node.id)])
     store = JsonConfigStore(tmp_path / "config.json")
     store.save(original)
     loaded = store.load()
@@ -68,6 +68,7 @@ def test_ghproxy_is_enabled_by_default_and_empty_old_value_is_migrated():
     migrated = AppSettings.from_dict({"ghproxy": ""})
     assert migrated.use_ghproxy is True
     assert migrated.ghproxy == "https://gh-proxy.com"
+    assert migrated.dns_server == "https://1.1.1.1/dns-query"
 
 
 def test_default_store_migrates_legacy_config_next_to_application(tmp_path, monkeypatch):

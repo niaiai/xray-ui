@@ -5,7 +5,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 RouteMode = Literal["global", "bypass_cn"]
-InboundProtocol = Literal["http", "socks", "mixed"]
+InboundProtocol = Literal["http", "socks"]
 Protocol = Literal["vless", "vmess", "trojan", "shadowsocks", "socks", "http"]
 
 
@@ -55,21 +55,23 @@ class Node:
 
 
 @dataclass(slots=True)
-class MixedInbound:
+class Inbound:
     name: str
     port: int
     node_id: str
     listen: str = "127.0.0.1"
     route_mode: RouteMode = "global"
-    protocol: InboundProtocol = "mixed"
+    protocol: InboundProtocol = "socks"
     skip_private: bool = True
     round_robin: bool = False
     round_robin_node_ids: list[str] = field(default_factory=list)
     custom_domains: list[str] = field(default_factory=list)
+    auth_username: str = ""
+    auth_password: str = ""
     id: str = field(default_factory=new_id)
 
     @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> MixedInbound:
+    def from_dict(cls, value: dict[str, Any]) -> Inbound:
         return cls(**value)
 
 
@@ -77,6 +79,7 @@ class MixedInbound:
 class AppSettings:
     xray_dir: str = ""
     ghproxy: str = "https://gh-proxy.com"
+    dns_server: str = "https://1.1.1.1/dns-query"
     use_ghproxy: bool = True
     auto_update: bool = True
     auto_start_xray: bool = False
@@ -87,6 +90,7 @@ class AppSettings:
         migrated = dict(value)
         if not migrated.get("ghproxy"):
             migrated["ghproxy"] = "https://gh-proxy.com"
+        migrated.setdefault("dns_server", "https://1.1.1.1/dns-query")
         migrated.setdefault("use_ghproxy", True)
         return cls(**migrated)
 
@@ -96,7 +100,7 @@ class AppConfig:
     schema_version: int = 1
     settings: AppSettings = field(default_factory=AppSettings)
     nodes: list[Node] = field(default_factory=list)
-    inbounds: list[MixedInbound] = field(default_factory=list)
+    inbounds: list[Inbound] = field(default_factory=list)
     direct_domains: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -118,7 +122,7 @@ class AppConfig:
             schema_version=int(value.get("schema_version", 1)),
             settings=AppSettings.from_dict(value.get("settings", {})),
             nodes=[Node.from_dict(item) for item in value.get("nodes", [])],
-            inbounds=[MixedInbound.from_dict(item) for item in inbound_values],
+            inbounds=[Inbound.from_dict(item) for item in inbound_values],
             direct_domains=list(dict.fromkeys(direct_domains)),
         )
 
@@ -144,7 +148,7 @@ class AppConfig:
         for inbound in self.inbounds:
             endpoint = (inbound.listen, inbound.port)
             if endpoint in endpoints:
-                errors.append(f"Mixed 入站端口重复：{inbound.listen}:{inbound.port}")
+                errors.append(f"入站端口重复：{inbound.listen}:{inbound.port}")
             endpoints.add(endpoint)
             if not 1 <= inbound.port <= 65535:
                 errors.append(f"入站 {inbound.name} 的端口无效")
@@ -152,8 +156,10 @@ class AppConfig:
                 errors.append(f"入站 {inbound.name} 未绑定有效节点")
             if inbound.route_mode not in {"global", "bypass_cn"}:
                 errors.append(f"入站 {inbound.name} 的路由模式无效")
-            if inbound.protocol not in {"http", "socks", "mixed"}:
+            if inbound.protocol not in {"http", "socks"}:
                 errors.append(f"入站 {inbound.name} 的协议无效")
+            if bool(inbound.auth_username) != bool(inbound.auth_password):
+                errors.append(f"入站 {inbound.name} 的鉴权用户名和密码必须同时填写")
             if inbound.round_robin:
                 selected = inbound.round_robin_node_ids or list(node_ids)
                 invalid = set(selected) - node_ids

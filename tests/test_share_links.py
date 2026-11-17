@@ -1,8 +1,8 @@
 import pytest
 
-from xray_ui.models import AppConfig, MixedInbound, Node
+from xray_ui.models import AppConfig, Inbound, Node
 from xray_ui.share_links import build_share_link, parse_share_link
-from xray_ui.xray_config import InternalPorts, build_xray_config
+from xray_ui.xray_config import build_xray_config
 
 
 @pytest.mark.parametrize(
@@ -54,6 +54,17 @@ def test_share_link_round_trip(node):
     assert parsed.credential == node.credential
 
 
+def test_https_proxy_share_link_round_trip():
+    node = Node(
+        "HTTPS 代理", "http", "proxy.example.com", 443, "user:password", security="tls"
+    )
+    link = build_share_link(node)
+    assert link.startswith("https://")
+    parsed = parse_share_link(link)
+    assert parsed.protocol == "http"
+    assert parsed.security == "tls"
+
+
 def test_parse_multiple_common_vless_parameters():
     link = (
         "vless://uuid@example.com:443?security=reality&type=tcp&sni=www.example.com"
@@ -80,11 +91,8 @@ def test_vless_import_preserves_transport_and_security_parameters():
     assert node.spider_x == "/spider"
     assert node.mldsa65_verify == "verify"
     assert node.alpn == ["h2", "http/1.1"]
-    inbound = MixedInbound("test", 1080, node.id)
-    outbound = build_xray_config(
-        AppConfig(nodes=[node], inbounds=[inbound]),
-        {inbound.id: InternalPorts(30001, 30002)},
-    )["outbounds"][0]
+    inbound = Inbound("test", 1080, node.id)
+    outbound = build_xray_config(AppConfig(nodes=[node], inbounds=[inbound]))["outbounds"][0]
     assert outbound["settings"]["encryption"] == node.encryption
     assert outbound["streamSettings"]["method"] == "grpc"
     assert outbound["streamSettings"]["realitySettings"]["password"] == "password"
@@ -107,11 +115,8 @@ def test_vmess_ws_import_uses_current_xray_method():
         alpn=["http/1.1"],
     )
     node = parse_share_link(build_share_link(original))
-    inbound = MixedInbound("test", 1080, node.id)
-    outbound = build_xray_config(
-        AppConfig(nodes=[node], inbounds=[inbound]),
-        {inbound.id: InternalPorts(30001, 30002)},
-    )["outbounds"][0]
+    inbound = Inbound("test", 1080, node.id)
+    outbound = build_xray_config(AppConfig(nodes=[node], inbounds=[inbound]))["outbounds"][0]
     assert node.transport == "websocket"
     assert outbound["settings"]["security"] == "chacha20-poly1305"
     assert outbound["streamSettings"]["method"] == "websocket"
