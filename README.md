@@ -2,6 +2,40 @@
 
 面向 Windows 的轻量级 Xray-core 图形管理器。通过表单管理节点、入站、路由和更新，日常使用无需手动编辑 Xray JSON。
 
+[下载最新版 XrayUI.exe](https://github.com/niaiai/xray-ui/releases/latest/download/XrayUI.exe) · [查看所有版本](https://github.com/niaiai/xray-ui/releases)
+
+## 界面预览
+
+首次启动时界面保持简洁，可直接下载 Xray-core，然后导入节点或手动添加配置。
+
+![Xray UI 首次启动](docs/images/xray-ui-initial.png)
+
+### 节点管理
+
+集中管理不同协议的出口节点，支持链接导入、分享链接复制和批量连通性测试。
+
+![Xray UI 节点管理](docs/images/xray-ui-nodes.png)
+
+### 入站管理
+
+为 SOCKS5 和 HTTP 入站分别选择出口、路由模式，也可以配置多个节点自动轮询。
+
+![Xray UI 入站管理](docs/images/xray-ui-inbounds.png)
+
+### 应用设置
+
+可配置 Xray 目录、下载代理、可信 DNS、自动更新、开机启动和强制代理域名。
+
+![Xray UI 应用设置](docs/images/xray-ui-settings.png)
+
+## 下载与安装
+
+1. 从 [Releases](https://github.com/niaiai/xray-ui/releases) 下载最新版 `XrayUI.exe`。
+2. 将程序放到一个具有写入权限的独立目录中，然后直接运行。
+3. 首次启动后点击“下载/更新 Xray”，程序会自动安装 `xray.exe`、`geoip.dat` 和 `geosite.dat`。
+
+配置、日志和 Xray-core 文件默认保存在 `XrayUI.exe` 所在目录。升级 UI 时只需替换 `XrayUI.exe`，不要删除同目录中的配置和核心文件。
+
 ## 功能概览
 
 - 管理 VLESS、VMess、Trojan、Shadowsocks、SOCKS5、HTTP/HTTPS 出口节点
