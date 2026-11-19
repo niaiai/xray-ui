@@ -139,14 +139,9 @@ Action: Direct
 | `xray-runtime.json` | 自动生成的 Xray 运行配置 |
 | `xray.pid` | 后台 Xray 进程标识 |
 | `xray-core.log` | Xray 标准输出日志 |
+| `xray-ui.log` | UI 操作日志，最多保留 5 个轮转文件 |
 | `xray.exe` | Xray-core |
 | `geoip.dat` / `geosite.dat` | Xray 路由数据 |
-
-UI 操作日志位于：
-
-```text
-%LOCALAPPDATA%\xray-ui\logs\xray-ui.log
-```
 
 ## 开发运行
 
