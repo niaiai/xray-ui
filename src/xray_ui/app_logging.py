@@ -12,7 +12,7 @@ def configure_logging(log_dir: Path | None = None) -> logging.Logger:
     if logger.handlers:
         return logger
     logger.setLevel(logging.INFO)
-    directory = log_dir or application_dir()
+    directory = log_dir or application_dir() / "log"
     directory.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(
         directory / "xray-ui.log", maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8"

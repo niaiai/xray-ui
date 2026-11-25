@@ -3,7 +3,7 @@ import logging
 from xray_ui.app_logging import configure_logging
 
 
-def test_rotating_log_file_defaults_to_application_directory(tmp_path, monkeypatch):
+def test_rotating_log_file_defaults_to_application_log_directory(tmp_path, monkeypatch):
     logger = logging.getLogger("xray_ui")
     for handler in logger.handlers[:]:
         handler.close()
@@ -13,4 +13,6 @@ def test_rotating_log_file_defaults_to_application_directory(tmp_path, monkeypat
     logger.info("UI 测试操作")
     for handler in logger.handlers:
         handler.flush()
-    assert "UI 测试操作" in (tmp_path / "xray-ui.log").read_text(encoding="utf-8")
+    assert "UI 测试操作" in (tmp_path / "log" / "xray-ui.log").read_text(
+        encoding="utf-8"
+    )

@@ -22,7 +22,8 @@ class XrayProcessManager:
         self.executable: Path | None = None
         self.on_log = on_log or (lambda _: None)
         self.pid_path = application_dir() / "xray.pid"
-        self.log_path = application_dir() / "xray-core.log"
+        self.log_path = application_dir() / "log" / "xray-core.log"
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
     @property
     def running(self) -> bool:
@@ -59,6 +60,12 @@ class XrayProcessManager:
         if self.running:
             raise RuntimeError("Xray 已在运行")
         runtime = build_xray_config(config)
+        xray_log_file = config.settings.xray_log_file.strip()
+        if config.settings.enable_xray_log and xray_log_file:
+            xray_log_path = Path(xray_log_file)
+            if not xray_log_path.is_absolute():
+                xray_log_path = xray_dir / xray_log_path
+            xray_log_path.parent.mkdir(parents=True, exist_ok=True)
         config_path = application_dir() / "xray-runtime.json"
         config_path.write_text(json.dumps(runtime, ensure_ascii=False, indent=2), encoding="utf-8")
         executable = xray_dir / "xray.exe"

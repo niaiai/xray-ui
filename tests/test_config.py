@@ -62,6 +62,31 @@ def test_trusted_dns_can_be_disabled():
     assert "dns" not in build_xray_config(config)
 
 
+def test_ipv6_can_be_enabled_for_dns_queries():
+    config, _, _inbound = sample_config()
+    config.settings.enable_ipv6 = True
+    assert build_xray_config(config)["dns"]["queryStrategy"] == "UseIP"
+
+
+def test_xray_log_level_can_be_configured_and_disabled():
+    config, _, _inbound = sample_config()
+    config.settings.xray_log_level = "info"
+    config.settings.xray_log_file = "./logs/xray.log"
+    assert build_xray_config(config)["log"] == {
+        "loglevel": "info",
+        "error": "./logs/xray.log",
+    }
+
+    config.settings.enable_xray_log = False
+    assert build_xray_config(config)["log"] == {"loglevel": "none"}
+
+
+def test_xray_log_file_can_be_left_empty_for_console_output():
+    config, _, _inbound = sample_config()
+    config.settings.xray_log_file = ""
+    assert build_xray_config(config)["log"] == {"loglevel": "warning"}
+
+
 def test_duplicate_names_receive_readable_unique_tags():
     first = Node("同名", "vless", "one.example.com", 443, "uuid-1")
     second = Node("同名", "vless", "two.example.com", 443, "uuid-2")
@@ -132,6 +157,20 @@ def test_proxy_domains_use_inbound_round_robin_balancer():
     rule = build_xray_config(config)["routing"]["rules"][0]
     assert rule["domain"] == ["domain:google.com"]
     assert rule["balancerTag"] == "轮询入口 轮询"
+
+
+def test_direct_domains_are_normalized_and_force_direct_for_every_inbound():
+    config, node, _inbound = sample_config()
+    config.inbounds.append(Inbound("入口 B", 10809, node.id))
+    config.direct_domains = ["example.cn", "*.internal.example"]
+
+    rules = build_xray_config(config)["routing"]["rules"]
+    direct_rules = [rule for rule in rules if rule.get("domain") == [
+        "domain:example.cn",
+        "domain:internal.example",
+    ]]
+    assert [rule["inboundTag"] for rule in direct_rules] == [["入口 A"], ["入口 B"]]
+    assert all(rule["outboundTag"] == "direct" for rule in direct_rules)
 
 
 def test_inbounds_listen_on_configured_public_port():

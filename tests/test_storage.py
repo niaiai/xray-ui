@@ -11,7 +11,7 @@ def test_json_round_trip(tmp_path):
     store.save(original)
     loaded = store.load()
     assert loaded.to_dict() == original.to_dict()
-    assert json.loads(store.path.read_text(encoding="utf-8"))["schema_version"] == 1
+    assert json.loads(store.path.read_text(encoding="utf-8"))["schema_version"] == 2
 
 
 def test_old_transport_names_are_migrated(tmp_path):
@@ -64,7 +64,15 @@ def test_old_domain_fields_are_migrated_to_global_proxy_domains(tmp_path):
 def test_old_direct_domains_name_is_migrated_to_proxy_domains():
     config = AppConfig.from_dict({"direct_domains": ["google.com"]})
     assert config.proxy_domains == ["google.com"]
-    assert "direct_domains" not in config.to_dict()
+    assert config.direct_domains == []
+
+
+def test_current_direct_domains_are_kept_as_direct_domains():
+    config = AppConfig.from_dict(
+        {"schema_version": 2, "direct_domains": ["example.cn"]}
+    )
+    assert config.proxy_domains == []
+    assert config.direct_domains == ["example.cn"]
 
 
 def test_ghproxy_is_enabled_by_default_and_empty_old_value_is_migrated():
@@ -75,6 +83,11 @@ def test_ghproxy_is_enabled_by_default_and_empty_old_value_is_migrated():
     assert migrated.use_ghproxy is True
     assert migrated.ghproxy == "https://gh-proxy.com"
     assert migrated.dns_server == "https://1.1.1.1/dns-query"
+    assert migrated.xray_dir == "./"
+    assert migrated.enable_ipv6 is False
+    assert migrated.enable_xray_log is True
+    assert migrated.xray_log_level == "warning"
+    assert migrated.xray_log_file == "./log/xray.log"
 
 
 def test_default_store_migrates_legacy_config_next_to_application(tmp_path, monkeypatch):
@@ -87,7 +100,7 @@ def test_default_store_migrates_legacy_config_next_to_application(tmp_path, monk
     monkeypatch.setattr("xray_ui.storage.default_data_dir", lambda: legacy_dir)
     store = JsonConfigStore()
     loaded = store.load()
-    assert loaded.schema_version == 1
+    assert loaded.schema_version == 2
     assert store.path == app_dir / "config.json"
     assert store.path.exists()
     assert legacy_config.exists()

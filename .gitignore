@@ -14,4 +14,6 @@ Desktop.ini
 .protocol-validation/
 /config.json
 /xray-runtime.json
+/xray-ui.log
+/xray-core.log
 

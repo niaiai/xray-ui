@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -26,7 +27,9 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
+    QSplitter,
     QStyle,
     QSystemTrayIcon,
     QTableWidget,
@@ -174,11 +177,11 @@ class NodeDialog(QDialog):
 
 class InboundDialog(QDialog):
     MODES: ClassVar = {
-        "全局": "global",
+        "全局走代理": "global",
         "跳过 CN": "bypass_cn",
     }
 
-    PROTOCOLS: ClassVar = {"HTTP": "http", "SOCKS5": "socks"}
+    PROTOCOLS: ClassVar = {"SOCKS5": "socks", "HTTP": "http"}
 
     def __init__(
         self,
@@ -193,7 +196,10 @@ class InboundDialog(QDialog):
         form = QFormLayout(self)
         self.form = form
         self.name = QLineEdit()
-        self.listen = QLineEdit("127.0.0.1")
+        self.listen = QComboBox()
+        self.listen.setEditable(True)
+        self.listen.addItems(["127.0.0.1", "0.0.0.0"])
+        self.listen.setCurrentText("127.0.0.1")
         self.port = QSpinBox()
         self.port.setRange(1, 65535)
         self.port.setValue(10808)
@@ -249,7 +255,7 @@ class InboundDialog(QDialog):
         self.round_robin_nodes.itemChanged.connect(self._update_all_state)
         if inbound:
             self.name.setText(inbound.name)
-            self.listen.setText(inbound.listen)
+            self.listen.setCurrentText(inbound.listen)
             self.port.setValue(inbound.port)
             self.auth_username.setText(inbound.auth_username)
             self.auth_password.setText(inbound.auth_password)
@@ -318,7 +324,7 @@ class InboundDialog(QDialog):
         selected_node_id = selected_ids[0] if round_robin else str(node_id)
         values = {
             "name": self.name.text().strip(),
-            "listen": self.listen.text().strip(),
+            "listen": self.listen.currentText().strip(),
             "port": self.port.value(),
             "node_id": selected_node_id,
             "route_mode": str(self.mode.currentData()),
@@ -340,7 +346,7 @@ class MainWindow(QMainWindow):
         self.config = self.store.load()
         legacy_xray_dir = str(default_data_dir() / "core")
         if not self.config.settings.xray_dir or self.config.settings.xray_dir == legacy_xray_dir:
-            self.config.settings.xray_dir = str(application_dir())
+            self.config.settings.xray_dir = "./"
         self.log_bridge = LogBridge()
         self.log_bridge.message.connect(self.append_log)
         self.manager = XrayProcessManager(self.log_bridge.message.emit)
@@ -362,7 +368,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         attached = self.manager.attach(Path(self.config.settings.xray_dir))
         if attached:
-            self.status.setText("运行中")
+            self._set_runtime_status(True)
         self._build_tray()
         self.refresh()
         self.audit("应用启动")
@@ -373,23 +379,25 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         central = QWidget()
         layout = QVBoxLayout(central)
-        controls = QHBoxLayout()
-        self.status = QLabel("已停止")
+        self.status = QLabel()
+        self._set_runtime_status(False)
         self.start_button = QPushButton("启动")
         self.stop_button = QPushButton("停止")
         self.update_button = QPushButton("下载/更新 Xray")
         self.exit_ui_button = QPushButton("退出 UI")
+        for button in (
+            self.start_button,
+            self.stop_button,
+            self.update_button,
+            self.exit_ui_button,
+        ):
+            button.setFixedHeight(26)
+            button.setMinimumWidth(82)
+        self.update_button.setMinimumWidth(112)
         self.start_button.clicked.connect(self.start_xray)
         self.stop_button.clicked.connect(self.stop_xray)
         self.update_button.clicked.connect(self.update_xray)
         self.exit_ui_button.clicked.connect(self._exit_app)
-        controls.addWidget(self.status)
-        controls.addStretch()
-        controls.addWidget(self.update_button)
-        controls.addWidget(self.start_button)
-        controls.addWidget(self.stop_button)
-        controls.addWidget(self.exit_ui_button)
-        layout.addLayout(controls)
 
         tabs = QTabWidget()
         self.node_table = QTableWidget(0, 5)
@@ -422,19 +430,40 @@ class MainWindow(QMainWindow):
             "入站",
         )
         tabs.addTab(self._settings_page(), "设置")
-        layout.addWidget(tabs, 3)
 
+        corner = QWidget()
+        corner_layout = QHBoxLayout(corner)
+        corner_layout.setContentsMargins(0, 0, 0, 0)
+        corner_layout.setSpacing(4)
+        corner_layout.addWidget(self.status, alignment=Qt.AlignmentFlag.AlignVCenter)
+        corner_layout.addWidget(self.update_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+        corner_layout.addWidget(self.start_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+        corner_layout.addWidget(self.stop_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+        corner_layout.addWidget(self.exit_ui_button, alignment=Qt.AlignmentFlag.AlignVCenter)
+        tabs.setCornerWidget(corner, Qt.Corner.TopRightCorner)
+
+        log_panel = QWidget()
+        log_layout = QVBoxLayout(log_panel)
+        log_layout.setContentsMargins(0, 0, 0, 0)
         log_header = QHBoxLayout()
         log_header.addWidget(QLabel("运行日志"))
         log_header.addStretch()
         clear_button = QPushButton("清空")
         clear_button.clicked.connect(self.clear_logs)
         log_header.addWidget(clear_button)
-        layout.addLayout(log_header)
+        log_layout.addLayout(log_header)
         self.logs = QTextEdit()
         self.logs.setReadOnly(True)
         self.logs.document().setMaximumBlockCount(500)
-        layout.addWidget(self.logs, 2)
+        log_layout.addWidget(self.logs)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(tabs)
+        splitter.addWidget(log_panel)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([500, 500])
+        layout.addWidget(splitter, 1)
         self.setCentralWidget(central)
         self.node_table.itemSelectionChanged.connect(self.update_action_states)
         self.inbound_table.itemSelectionChanged.connect(self.update_action_states)
@@ -447,6 +476,7 @@ class MainWindow(QMainWindow):
     def _table_page(self, table, add, remove, extra_actions=()) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setContentsMargins(9, 18, 9, 9)
         layout.addWidget(table)
         row = QHBoxLayout()
         add_button, remove_button = QPushButton("新增"), QPushButton("删除")
@@ -468,24 +498,57 @@ class MainWindow(QMainWindow):
         table.setAlternatingRowColors(True)
         table.verticalHeader().setVisible(False)
         header = table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(table.columnCount() - 1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(False)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         if table is self.node_table:
+            for column, width in enumerate((140, 100, 200, 90, 200)):
+                table.setColumnWidth(column, width)
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
             self.node_buttons = buttons
         else:
+            for column, width in enumerate((140, 100, 120, 80, 100, 220, 170)):
+                table.setColumnWidth(column, width)
+            header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
             self.inbound_buttons = buttons
         return page
 
     def _settings_page(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
         page = QWidget()
-        form = QFormLayout(page)
+        columns = QHBoxLayout(page)
+        basic_group = QGroupBox("基础设置")
+        basic_form = QFormLayout(basic_group)
+        global_group = QGroupBox("全局配置")
+        global_layout = QVBoxLayout(global_group)
+        global_form = QFormLayout()
         self.xray_dir = QLineEdit(self.config.settings.xray_dir)
         self.ghproxy = QLineEdit(self.config.settings.ghproxy)
         self.ghproxy.setPlaceholderText("例如 https://gh-proxy.com")
         self.dns_server = QLineEdit(self.config.settings.dns_server)
-        self.dns_server.setPlaceholderText("例如 https://1.1.1.1/dns-query")
+        self.dns_server.setPlaceholderText("留空表示不配置 DNS")
+        self.enable_ipv6 = QCheckBox()
+        self.enable_ipv6.setChecked(self.config.settings.enable_ipv6)
+        self.enable_xray_log = QCheckBox()
+        self.enable_xray_log.setChecked(self.config.settings.enable_xray_log)
+        self.xray_log_level = QComboBox()
+        for label, value in (
+            ("调试", "debug"),
+            ("信息", "info"),
+            ("警告", "warning"),
+            ("错误", "error"),
+        ):
+            self.xray_log_level.addItem(label, value)
+        log_level_index = self.xray_log_level.findData(self.config.settings.xray_log_level)
+        if log_level_index >= 0:
+            self.xray_log_level.setCurrentIndex(log_level_index)
+        self.xray_log_level.setEnabled(self.enable_xray_log.isChecked())
+        self.enable_xray_log.toggled.connect(self.xray_log_level.setEnabled)
+        self.xray_log_file = QLineEdit(self.config.settings.xray_log_file)
+        self.xray_log_file.setPlaceholderText("例如 ./log/xray.log，留空表示输出到控制台")
+        self.xray_log_file.setEnabled(self.enable_xray_log.isChecked())
+        self.enable_xray_log.toggled.connect(self.xray_log_file.setEnabled)
         self.use_ghproxy = QCheckBox()
         self.use_ghproxy.setChecked(self.config.settings.use_ghproxy)
         self.auto_update = QCheckBox()
@@ -495,22 +558,41 @@ class MainWindow(QMainWindow):
         self.start_with_windows = QCheckBox()
         self.start_with_windows.setChecked(self.config.settings.start_with_windows)
         self.proxy_domains = QTextEdit()
+        self.proxy_domains.setMinimumHeight(100)
         self.proxy_domains.setPlainText("\n".join(self.config.proxy_domains))
         self.proxy_domains.setPlaceholderText(
             "每行一个强制走代理的域名，例如 example.com 或 *.example.com"
         )
+        self.direct_domains = QTextEdit()
+        self.direct_domains.setMinimumHeight(100)
+        self.direct_domains.setPlainText("\n".join(self.config.direct_domains))
+        self.direct_domains.setPlaceholderText(
+            "每行一个强制直连的域名，例如 example.cn 或 *.example.cn"
+        )
         save = QPushButton("保存设置")
         save.clicked.connect(self.save_settings)
-        form.addRow("Xray 目录", self.xray_dir)
-        form.addRow("ghproxy", self.ghproxy)
-        form.addRow("可信 DNS", self.dns_server)
-        form.addRow("使用 ghproxy 下载", self.use_ghproxy)
-        form.addRow("启动时检查更新", self.auto_update)
-        form.addRow("启动应用后运行 Xray", self.auto_start_xray)
-        form.addRow("开机启动", self.start_with_windows)
-        form.addRow("全局代理域名", self.proxy_domains)
-        form.addRow(save)
-        return page
+        basic_form.addRow("Xray 目录", self.xray_dir)
+        basic_form.addRow("ghproxy", self.ghproxy)
+        basic_form.addRow("可信 DNS", self.dns_server)
+        basic_form.addRow("启用 IPv6", self.enable_ipv6)
+        basic_form.addRow("启用 Xray 日志", self.enable_xray_log)
+        basic_form.addRow("Xray 日志等级", self.xray_log_level)
+        basic_form.addRow("Xray 日志文件", self.xray_log_file)
+        basic_form.addRow("使用 ghproxy 下载", self.use_ghproxy)
+        basic_form.addRow("启动时检查更新", self.auto_update)
+        basic_form.addRow("启动应用后运行 Xray", self.auto_start_xray)
+        basic_form.addRow("开机启动", self.start_with_windows)
+
+        global_form.addRow("全局代理域名", self.proxy_domains)
+        global_form.addRow("全局直连域名", self.direct_domains)
+        global_layout.addLayout(global_form)
+        global_layout.addStretch()
+        global_layout.addWidget(save, alignment=Qt.AlignmentFlag.AlignRight)
+
+        columns.addWidget(basic_group, 1)
+        columns.addWidget(global_group, 1)
+        scroll.setWidget(page)
+        return scroll
 
     def _build_tray(self) -> None:
         icon_path = resource_path("resources/xray-ui.ico")
@@ -570,12 +652,13 @@ class MainWindow(QMainWindow):
                 (node.name, node.protocol, node.address, str(node.port), result_text)
             ):
                 cell = QTableWidgetItem(value)
+                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 if column == 4 and result_text != "未测试":
                     cell.setForeground(QColor("#15803d" if success else "#b91c1c"))
                 self.node_table.setItem(row, column, cell)
         names = {node.id: node.name for node in self.config.nodes}
         route_names = {
-            "global": "全局",
+            "global": "全局走代理",
             "bypass_cn": "跳过 CN",
         }
         protocol_names = {"http": "HTTP", "socks": "SOCKS5"}
@@ -603,7 +686,9 @@ class MainWindow(QMainWindow):
                 route_label,
             )
             for column, value in enumerate(values):
-                self.inbound_table.setItem(row, column, QTableWidgetItem(value))
+                cell = QTableWidgetItem(value)
+                cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.inbound_table.setItem(row, column, cell)
         self.update_action_states()
 
     def update_action_states(self) -> None:
@@ -623,6 +708,21 @@ class MainWindow(QMainWindow):
         self.stop_button.setVisible(self.manager.running)
         self.stop_button.setEnabled(self.manager.running)
         self.update_button.setEnabled(not bool(self.worker and self.worker.isRunning()))
+
+    def _set_runtime_status(self, running: bool) -> None:
+        self.status.setFixedWidth(88)
+        self.status.setFixedHeight(26)
+        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if running:
+            self.status.setText("运行中")
+            foreground, background = "#166534", "#dcfce7"
+        else:
+            self.status.setText("已停止")
+            foreground, background = "#991b1b", "#fee2e2"
+        self.status.setStyleSheet(
+            f"color: {foreground}; background: {background}; font-weight: 600; "
+            "padding: 1px 8px; border-radius: 4px;"
+        )
 
     def add_node(self) -> None:
         dialog = NodeDialog(self)
@@ -825,12 +925,19 @@ class MainWindow(QMainWindow):
         self.config.settings.xray_dir = self.xray_dir.text().strip()
         self.config.settings.ghproxy = self.ghproxy.text().strip()
         self.config.settings.dns_server = self.dns_server.text().strip()
+        self.config.settings.enable_ipv6 = self.enable_ipv6.isChecked()
+        self.config.settings.enable_xray_log = self.enable_xray_log.isChecked()
+        self.config.settings.xray_log_level = str(self.xray_log_level.currentData())
+        self.config.settings.xray_log_file = self.xray_log_file.text().strip()
         self.config.settings.use_ghproxy = self.use_ghproxy.isChecked()
         self.config.settings.auto_update = self.auto_update.isChecked()
         self.config.settings.auto_start_xray = self.auto_start_xray.isChecked()
         self.config.settings.start_with_windows = self.start_with_windows.isChecked()
         self.config.proxy_domains = [
             line.strip() for line in self.proxy_domains.toPlainText().splitlines() if line.strip()
+        ]
+        self.config.direct_domains = [
+            line.strip() for line in self.direct_domains.toPlainText().splitlines() if line.strip()
         ]
         try:
             set_start_with_windows(self.config.settings.start_with_windows)
@@ -844,7 +951,7 @@ class MainWindow(QMainWindow):
         try:
             self.store.save(self.config)
             self.manager.start(self.config, Path(self.config.settings.xray_dir))
-            self.status.setText("运行中")
+            self._set_runtime_status(True)
             self.audit("启动 Xray")
             self.update_action_states()
         except Exception as error:
@@ -852,7 +959,7 @@ class MainWindow(QMainWindow):
 
     def stop_xray(self) -> None:
         self.manager.stop()
-        self.status.setText("已停止")
+        self._set_runtime_status(False)
         self.audit("停止 Xray")
         self.update_action_states()
 
@@ -923,7 +1030,7 @@ class MainWindow(QMainWindow):
     def _exit_all(self) -> None:
         self.closing_all = True
         self.manager.stop()
-        self.status.setText("已停止")
+        self._set_runtime_status(False)
         self.audit("全部退出：已停止 Xray 并关闭 UI")
         self.close()
 

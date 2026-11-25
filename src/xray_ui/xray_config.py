@@ -107,6 +107,7 @@ def build_xray_config(config: AppConfig) -> dict[str, Any]:
     rules: list[dict[str, Any]] = []
     balancers: list[dict[str, Any]] = []
     proxy_domains = [normalize_domain(value) for value in config.proxy_domains if value.strip()]
+    direct_domains = [normalize_domain(value) for value in config.direct_domains if value.strip()]
     used_outbound_tags = {"direct"}
     outbound_tags = {
         node.id: _unique_tag(node.name, used_outbound_tags) for node in config.nodes
@@ -171,6 +172,15 @@ def build_xray_config(config: AppConfig) -> dict[str, Any]:
                     **proxy_target,
                 }
             )
+        if direct_domains:
+            rules.append(
+                {
+                    "type": "field",
+                    "inboundTag": tags,
+                    "domain": direct_domains,
+                    "outboundTag": "direct",
+                }
+            )
         if inbound.skip_private:
             rules.append(
                 {
@@ -199,8 +209,16 @@ def build_xray_config(config: AppConfig) -> dict[str, Any]:
             )
         rules.append({"type": "field", "inboundTag": tags, **proxy_target})
 
+    log_config = {
+        "loglevel": (
+            config.settings.xray_log_level if config.settings.enable_xray_log else "none"
+        )
+    }
+    if config.settings.enable_xray_log and config.settings.xray_log_file.strip():
+        log_config["error"] = config.settings.xray_log_file.strip()
+
     runtime = {
-        "log": {"loglevel": "warning"},
+        "log": log_config,
         "inbounds": inbounds,
         "outbounds": [_outbound(node, outbound_tags[node.id]) for node in config.nodes]
         + [{"tag": "direct", "protocol": "freedom", "settings": {}}],
@@ -214,7 +232,7 @@ def build_xray_config(config: AppConfig) -> dict[str, Any]:
     if dns_server:
         runtime["dns"] = {
             "servers": [dns_server],
-            "queryStrategy": "UseIPv4",
+            "queryStrategy": "UseIP" if config.settings.enable_ipv6 else "UseIPv4",
             "disableFallback": True,
             "useSystemHosts": False,
         }

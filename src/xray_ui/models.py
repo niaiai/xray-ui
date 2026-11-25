@@ -77,9 +77,13 @@ class Inbound:
 
 @dataclass(slots=True)
 class AppSettings:
-    xray_dir: str = ""
+    xray_dir: str = "./"
     ghproxy: str = "https://gh-proxy.com"
     dns_server: str = "https://1.1.1.1/dns-query"
+    enable_ipv6: bool = False
+    enable_xray_log: bool = True
+    xray_log_level: str = "warning"
+    xray_log_file: str = "./log/xray.log"
     use_ghproxy: bool = True
     auto_update: bool = True
     auto_start_xray: bool = False
@@ -88,20 +92,30 @@ class AppSettings:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> AppSettings:
         migrated = dict(value)
+        if not migrated.get("xray_dir"):
+            migrated["xray_dir"] = "./"
         if not migrated.get("ghproxy"):
             migrated["ghproxy"] = "https://gh-proxy.com"
         migrated.setdefault("dns_server", "https://1.1.1.1/dns-query")
+        migrated.setdefault("enable_ipv6", False)
+        migrated.setdefault("enable_xray_log", True)
+        migrated.setdefault("xray_log_level", "warning")
+        if migrated.get("xray_log_file", "./xray.log") == "./xray.log":
+            migrated["xray_log_file"] = "./log/xray.log"
+        if migrated["xray_log_level"] not in {"debug", "info", "warning", "error"}:
+            migrated["xray_log_level"] = "warning"
         migrated.setdefault("use_ghproxy", True)
         return cls(**migrated)
 
 
 @dataclass(slots=True)
 class AppConfig:
-    schema_version: int = 1
+    schema_version: int = 2
     settings: AppSettings = field(default_factory=AppSettings)
     nodes: list[Node] = field(default_factory=list)
     inbounds: list[Inbound] = field(default_factory=list)
     proxy_domains: list[str] = field(default_factory=list)
+    direct_domains: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -109,8 +123,13 @@ class AppConfig:
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> AppConfig:
         inbound_values = [dict(item) for item in value.get("inbounds", [])]
-        proxy_domains = list(value.get("proxy_domains", value.get("direct_domains", [])))
-        # 兼容旧字段名，将原配置按其实际语义迁移为全局代理域名。
+        schema_version = int(value.get("schema_version", 1))
+        proxy_domains = list(value.get("proxy_domains", []))
+        direct_domains = list(value.get("direct_domains", []))
+        # 旧版 direct_domains 的实际语义是强制代理，升级时保持原有行为。
+        if schema_version < 2 and not proxy_domains:
+            proxy_domains = direct_domains
+            direct_domains = []
         for item in inbound_values:
             if item.get("route_mode") == "custom":
                 proxy_domains.extend(item.get("custom_domains", []))
@@ -119,11 +138,12 @@ class AppConfig:
                 item["route_mode"] = "global"
                 item["skip_private"] = True
         return cls(
-            schema_version=int(value.get("schema_version", 1)),
+            schema_version=2,
             settings=AppSettings.from_dict(value.get("settings", {})),
             nodes=[Node.from_dict(item) for item in value.get("nodes", [])],
             inbounds=[Inbound.from_dict(item) for item in inbound_values],
             proxy_domains=list(dict.fromkeys(proxy_domains)),
+            direct_domains=list(dict.fromkeys(direct_domains)),
         )
 
     def validate(self) -> list[str]:

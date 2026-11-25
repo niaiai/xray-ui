@@ -41,9 +41,11 @@
 - 管理 VLESS、VMess、Trojan、Shadowsocks、SOCKS5、HTTP/HTTPS 出口节点
 - 支持 SOCKS5 和 HTTP 入站，可配置监听地址、端口及用户名/密码鉴权
 - 每个入站可绑定单个节点，或选择部分/全部节点进行 Round Robin 轮询
-- 支持全局代理、跳过 CN、私有地址直连和全局代理域名
+- 支持全局代理、跳过 CN、私有地址直连、全局代理域名和全局直连域名
 - 使用流量嗅探恢复 HTTP Host / TLS SNI，修正客户端传入的污染 IP
 - 内置可配置的可信 DoH，默认使用 Cloudflare IPv4 DNS
+- Xray 目录默认使用当前目录 `./`，可信 DNS 可留空禁用，并可选择启用 IPv6
+- 可启用或关闭 Xray 运行日志，配置日志等级及日志文件路径
 - 导入、导出常见分享链接，并保留 TLS、REALITY、WebSocket、gRPC、XHTTP 等参数
 - 单节点右键测试，或通过“全部测试”依次检测所有节点
 - 自动下载、更新 Xray-core，支持 ghproxy 下载前缀和下载进度日志
@@ -93,7 +95,7 @@ HTTPS 上游代理在内部表示为 HTTP + TLS，导出时仍保持 `https://`�
 - 监听地址和端口
 - 可选的鉴权用户名、密码
 - 单节点或轮询出口
-- 全局或跳过 CN 路由模式
+- 每个入站独立选择全局走代理、跳过 CN 或全局直连
 - 是否直连私有地址
 
 用户名和密码必须同时填写；两者均留空时不启用鉴权。HTTP 入站使用 Basic Authentication，SOCKS5 入站使用用户名/密码认证。
@@ -105,11 +107,14 @@ SOCKS5 和 HTTP 本身不加密，不建议直接暴露到公网。监听局域�
 规则按优先级处理：
 
 1. 全局代理域名
-2. 私有地址直连（启用时）
-3. CN 域名和 IP 直连（选择“跳过 CN”时）
-4. 入站绑定的节点或轮询出口
+2. 全局直连域名
+3. 私有地址直连（启用时）
+4. CN 域名和 IP 直连（选择“跳过 CN”时）
+5. 入站绑定的节点或轮询出口
 
 “全局代理域名”中的域名会强制使用每个入站自己的代理出口，因此可覆盖跳过 CN 和私有直连规则。每行填写一个值，支持：
+
+“全局直连域名”使用相同格式，匹配后会强制使用直连出口。若同一域名同时出现在两个列表中，全局代理域名优先。
 
 ```text
 example.com
@@ -172,8 +177,9 @@ Action: Direct
 | `config.json` | 应用配置 |
 | `xray-runtime.json` | 自动生成的 Xray 运行配置 |
 | `xray.pid` | 后台 Xray 进程标识 |
-| `xray-core.log` | Xray 标准输出日志 |
-| `xray-ui.log` | UI 操作日志，最多保留 5 个轮转文件 |
+| `log/xray-core.log` | Xray 标准输出日志 |
+| `log/xray-ui.log` | UI 操作日志，最多保留 5 个轮转文件 |
+| `log/xray.log` | Xray 默认错误日志 |
 | `xray.exe` | Xray-core |
 | `geoip.dat` / `geosite.dat` | Xray 路由数据 |
 
